@@ -97,7 +97,7 @@ export function Sidebar({ accounts }: SidebarProps) {
         ) : (
           <div className="space-y-0.5 pb-4">
             {accounts.map((account) => {
-              const isActive = pathname === `/accounts/${account.id}`
+              const isActive = pathname.startsWith(`/accounts/${account.id}`)
               return (
                 <div
                   key={account.id}

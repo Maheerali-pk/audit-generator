@@ -12,7 +12,9 @@ import {
   FileText,
   Building2,
   Loader2,
+  Settings,
 } from "lucide-react"
+import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -184,6 +186,12 @@ export function AccountDetail({ account }: { account: KlaviyoAccount }) {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <Link href={`/accounts/${account.id}/settings`}>
+            <Button variant="outline" size="sm">
+              <Settings className="h-4 w-4" />
+              Settings
+            </Button>
+          </Link>
           <Button
             variant="outline"
             size="sm"

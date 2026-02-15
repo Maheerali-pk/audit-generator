@@ -185,16 +185,39 @@ export async function queryMetricAggregateCount(
 }
 
 /**
+ * Fuzzy-matches a flow name against the flows list.
+ * Returns all matching flows (exact first, then contains).
+ */
+export function findFlowsByName(
+  allFlows: KlaviyoFlow[],
+  flowName: string
+): KlaviyoFlow[] {
+  const nameLower = flowName.toLowerCase()
+
+  // Exact matches first
+  const exact = allFlows.filter(
+    (f) => f.attributes.name.toLowerCase() === nameLower
+  )
+  if (exact.length > 0) return exact
+
+  // Fallback to contains
+  const partial = allFlows.filter(
+    (f) => f.attributes.name.toLowerCase().includes(nameLower)
+  )
+  return partial
+}
+
+/**
  * Generic function: queries the metric-aggregates endpoint filtered by
- * a specific flow. Resolves flow ID and metric ID from their names.
- * Returns the total count across all date buckets.
+ * one or more flow names. Resolves flow IDs and metric ID from their names.
+ * Sums results across all matched flows. Returns the total across all date buckets.
  */
 export async function queryMetricAggregateCountByEventAndFlow(
   apiKey: string,
   allMetrics: KlaviyoMetric[],
   allFlows: KlaviyoFlow[],
   metricName: string,
-  flowName: string,
+  flowNames: string[],
   startDate: string,
   endDate: string,
   measurement: MetricMeasurement = "count",
@@ -202,66 +225,70 @@ export async function queryMetricAggregateCountByEventAndFlow(
 ): Promise<number> {
   const metricId = findMetricIdByName(allMetrics, metricName)
 
-  // Fuzzy match: first try exact, then try contains
-  const flowNameLower = flowName.toLowerCase()
-  let flow = allFlows.find(
-    (f) => f.attributes.name.toLowerCase() === flowNameLower
-  )
-  if (!flow) {
-    flow = allFlows.find(
-      (f) => f.attributes.name.toLowerCase().includes(flowNameLower)
-    )
-  }
-  if (!flow) {
-    console.warn(
-      `[klaviyo] Flow "${flowName}" not found. Available flows:`,
-      allFlows.map((f) => f.attributes.name)
-    )
-    return 0
-  }
-  console.log(`[klaviyo] Matched flow "${flowName}" → "${flow.attributes.name}" (${flow.id})`)
-
-  const body: MetricAggregateRequest = {
-    data: {
-      type: "metric-aggregate",
-      attributes: {
-        metric_id: metricId,
-        measurements: [measurement],
-        filter: [
-          `greater-or-equal(datetime,${startDate})`,
-          `less-than(datetime,${endDate})`,
-          `equals(${flowAttribute},"${flow.id}")`,
-        ],
-        interval: "month",
-        timezone: "US/Eastern",
-      },
-    },
-  }
-
-  const response = await fetch(`${KLAVIYO_BASE_URL}/api/metric-aggregates`, {
-    method: "POST",
-    headers: klaviyoHeaders(apiKey),
-    body: JSON.stringify(body),
-  })
-
-  if (!response.ok) {
-    const errorBody = await response.text()
-    throw new Error(
-      `Klaviyo Metric Aggregates API error (${response.status}): ${errorBody}`
-    )
-  }
-
-  const result: MetricAggregateResponse = await response.json()
-
-  let total = 0
-  for (const dataPoint of result.data.attributes.data) {
-    const values = dataPoint.measurements[measurement] ?? []
-    for (const v of values) {
-      total += v
+  // Resolve all flow names to flows
+  const matchedFlows: KlaviyoFlow[] = []
+  for (const flowName of flowNames) {
+    const found = findFlowsByName(allFlows, flowName)
+    if (found.length === 0) {
+      console.warn(
+        `[klaviyo] Flow "${flowName}" not found. Available flows:`,
+        allFlows.map((f) => f.attributes.name)
+      )
+    } else {
+      console.log(
+        `[klaviyo] Matched "${flowName}" → ${found.map((f) => `"${f.attributes.name}" (${f.id})`).join(", ")}`
+      )
+      matchedFlows.push(...found)
     }
   }
 
-  return total
+  if (matchedFlows.length === 0) return 0
+
+  // Query each matched flow sequentially and sum results
+  let grandTotal = 0
+  for (const flow of matchedFlows) {
+    const body: MetricAggregateRequest = {
+      data: {
+        type: "metric-aggregate",
+        attributes: {
+          metric_id: metricId,
+          measurements: [measurement],
+          filter: [
+            `greater-or-equal(datetime,${startDate})`,
+            `less-than(datetime,${endDate})`,
+            `equals(${flowAttribute},"${flow.id}")`,
+          ],
+          interval: "month",
+          timezone: "US/Eastern",
+        },
+      },
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    const response = await fetch(`${KLAVIYO_BASE_URL}/api/metric-aggregates`, {
+      method: "POST",
+      headers: klaviyoHeaders(apiKey),
+      body: JSON.stringify(body),
+    })
+
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(
+        `Klaviyo Metric Aggregates API error (${response.status}): ${errorBody}`
+      )
+    }
+
+    const result: MetricAggregateResponse = await response.json()
+
+    for (const dataPoint of result.data.attributes.data) {
+      const values = dataPoint.measurements[measurement] ?? []
+      for (const v of values) {
+        grandTotal += v
+      }
+    }
+  }
+
+  return grandTotal
 }
 
 // ── Forms API ────────────────────────────────────────────────────────

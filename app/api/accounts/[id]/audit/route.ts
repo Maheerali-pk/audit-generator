@@ -14,6 +14,7 @@ import {
 } from "@/lib/klaviyo"
 import { createEmptyMetrics } from "@/types/audit.types"
 import type { Json } from "@/types/database.types"
+import type { FlowMappings, FlowMappingEntry } from "@/types/custom-config.types"
 import {
   getActiveEmailSubscribers,
   getSuppressedProfilesPercent,
@@ -255,63 +256,86 @@ export async function POST(
       const flowStart = ninetyDaysAgoFlow.toISOString().split("T")[0] + "T00:00:00"
       const flowEnd = now90d.toISOString().split("T")[0] + "T00:00:00"
 
-      // Helper to compute open/click rates for a flow
+      // Read flow mappings from account settings
+      const fm = account.flow_mappings as FlowMappings | null
+      const getFlowNames = (category: keyof FlowMappings): string[] => {
+        const entries = fm?.[category] as FlowMappingEntry[] | undefined
+        if (!entries || entries.length === 0) return []
+        return entries.map((e) => e.flow_name)
+      }
+
+      console.log("[audit] Flow mappings from account:", JSON.stringify(fm))
+
+      // Helper to compute open/click rates for one or more flows (aggregated)
       const computeFlowRate = async (
-        flowName: string,
+        flowNames: string[],
         eventName: string
       ): Promise<number | null> => {
+        if (flowNames.length === 0) return null
         const eventCount = await queryMetricAggregateCountByEventAndFlow(
-          apiKey, flowMetricsList, allFlows, eventName, flowName, flowStart, flowEnd
+          apiKey, flowMetricsList, allFlows, eventName, flowNames, flowStart, flowEnd
         )
         const receivedCount = await queryMetricAggregateCountByEventAndFlow(
-          apiKey, flowMetricsList, allFlows, "Received Email", flowName, flowStart, flowEnd
+          apiKey, flowMetricsList, allFlows, "Received Email", flowNames, flowStart, flowEnd
         )
-        console.log(`[audit] ${flowName} — ${eventName}:`, eventCount, "Received:", receivedCount)
+        const label = flowNames.join(" | ")
+        console.log(`[audit] ${label} — ${eventName}:`, eventCount, "Received:", receivedCount)
         return receivedCount > 0
           ? parseFloat(((eventCount / receivedCount) * 100).toFixed(2))
           : null
       }
 
       // Welcome Flow
-      metrics.welcome_flow_open_rate = await computeFlowRate("Welcome Series", "Opened Email")
-      metrics.welcome_flow_click_rate = await computeFlowRate("Welcome Series", "Clicked Email")
+      const welcomeFlowNames = getFlowNames("welcome")
+      metrics.welcome_flow_open_rate = await computeFlowRate(welcomeFlowNames, "Opened Email")
+      metrics.welcome_flow_click_rate = await computeFlowRate(welcomeFlowNames, "Clicked Email")
 
       // Welcome Flow — Revenue (Placed Order attributed to Welcome flow)
-      metrics.welcome_flow_revenue = await queryMetricAggregateCountByEventAndFlow(
-        apiKey, flowMetricsList, allFlows, "Placed Order", "Welcome Series",
-        flowStart, flowEnd, "sum_value", "$attributed_flow"
-      )
+      if (welcomeFlowNames.length > 0) {
+        metrics.welcome_flow_revenue = await queryMetricAggregateCountByEventAndFlow(
+          apiKey, flowMetricsList, allFlows, "Placed Order", welcomeFlowNames,
+          flowStart, flowEnd, "sum_value", "$attributed_flow"
+        )
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 500));
       console.log("[audit] Welcome Flow — Revenue:", metrics.welcome_flow_revenue)
 
       // Abandoned Cart Flow
-      metrics.abandoned_cart_open_rate = await computeFlowRate("Abandoned Cart Reminder (Email)", "Opened Email")
-      metrics.abandoned_cart_click_rate = await computeFlowRate("Abandoned Cart Reminder (Email)", "Clicked Email")
+      const acFlowNames = getFlowNames("abandoned_cart")
+      metrics.abandoned_cart_open_rate = await computeFlowRate(acFlowNames, "Opened Email")
+      metrics.abandoned_cart_click_rate = await computeFlowRate(acFlowNames, "Clicked Email")
 
       // Abandoned Cart — Recovery Rate (Placed Order by AC / Received Email for AC)
-      const acPlacedOrders = await queryMetricAggregateCountByEventAndFlow(
-        apiKey, flowMetricsList, allFlows, "Placed Order", "Abandoned Cart Reminder (Email)",
-        flowStart, flowEnd, "count", "$attributed_flow"
-      )
-      const acReceived = await queryMetricAggregateCountByEventAndFlow(
-        apiKey, flowMetricsList, allFlows, "Received Email", "Abandoned Cart Reminder (Email)",
-        flowStart, flowEnd, "count", "$flow"
-      )
-      console.log("[audit] Abandoned Cart — Placed Orders:", acPlacedOrders, "Received:", acReceived)
-      metrics.abandoned_cart_recovery_rate = acReceived > 0
-        ? parseFloat(((acPlacedOrders / acReceived) * 100).toFixed(2))
-        : null
+      if (acFlowNames.length > 0) {
+        const acPlacedOrders = await queryMetricAggregateCountByEventAndFlow(
+          apiKey, flowMetricsList, allFlows, "Placed Order", acFlowNames,
+          flowStart, flowEnd, "count", "$attributed_flow"
+        )
+        const acReceived = await queryMetricAggregateCountByEventAndFlow(
+          apiKey, flowMetricsList, allFlows, "Received Email", acFlowNames,
+          flowStart, flowEnd, "count", "$flow"
+        )
+        console.log("[audit] Abandoned Cart — Placed Orders:", acPlacedOrders, "Received:", acReceived)
+        metrics.abandoned_cart_recovery_rate = acReceived > 0
+          ? parseFloat(((acPlacedOrders / acReceived) * 100).toFixed(2))
+          : null
+      }
 
       // Browse Abandonment Flow
-      metrics.browse_abandonment_open_rate = await computeFlowRate("Browse Abandonment", "Opened Email")
-      metrics.browse_abandonment_click_rate = await computeFlowRate("Browse Abandonment", "Clicked Email")
+      const browseFlowNames = getFlowNames("browse_abandonment")
+      metrics.browse_abandonment_open_rate = await computeFlowRate(browseFlowNames, "Opened Email")
+      metrics.browse_abandonment_click_rate = await computeFlowRate(browseFlowNames, "Clicked Email")
 
       // Post-Purchase Flow
-      metrics.post_purchase_open_rate = await computeFlowRate("Customer Thank You - New vs. Returning", "Opened Email")
-      metrics.post_purchase_click_rate = await computeFlowRate("Customer Thank You - New vs. Returning", "Clicked Email")
+      const postPurchaseFlowNames = getFlowNames("post_purchase")
+      metrics.post_purchase_open_rate = await computeFlowRate(postPurchaseFlowNames, "Opened Email")
+      metrics.post_purchase_click_rate = await computeFlowRate(postPurchaseFlowNames, "Clicked Email")
 
       // Winback Flow
-      metrics.winback_open_rate = await computeFlowRate("Customer Winback", "Opened Email")
-      metrics.winback_click_rate = await computeFlowRate("Customer Winback", "Clicked Email")
+      const winbackFlowNames = getFlowNames("winback")
+      metrics.winback_open_rate = await computeFlowRate(winbackFlowNames, "Opened Email")
+      metrics.winback_click_rate = await computeFlowRate(winbackFlowNames, "Clicked Email")
 
       // Flow Revenue as % of Total Email Revenue
       const placedOrderMetricId = findMetricIdByName(flowMetricsList, "Placed Order")

@@ -1,4 +1,9 @@
 import type { AuditMetrics } from "@/types/audit.types"
+import type {
+  FlowCategory,
+  FlowCategoryMeta,
+  FlowMappings,
+} from "@/types/custom-config.types"
 
 // ── Format types for rendering metric values ─────────────────────────
 
@@ -129,4 +134,35 @@ export function formatMetricValue(
     default:
       return String(value)
   }
+}
+
+// ── Flow Category Metadata ───────────────────────────────────────────
+
+export const FLOW_CATEGORIES: FlowCategoryMeta[] = [
+  { key: "welcome", label: "Welcome Flow", description: "Welcome series / new subscriber onboarding" },
+  { key: "abandoned_cart", label: "Abandoned Cart", description: "Cart abandonment recovery flows" },
+  { key: "browse_abandonment", label: "Browse Abandonment", description: "Browse abandonment re-engagement" },
+  { key: "post_purchase", label: "Post-Purchase", description: "Post-purchase follow-up and thank you" },
+  { key: "winback", label: "Winback", description: "Customer winback and re-engagement" },
+]
+
+/** Keywords used by "Auto Add Flows" to match flow names (case-insensitive includes) */
+export const FLOW_AUTO_KEYWORDS: Record<FlowCategory, string[]> = {
+  welcome: ["welcome"],
+  abandoned_cart: ["abandoned cart", "cart abandon", "checkout abandon"],
+  browse_abandonment: ["browse abandon", "browsing abandon"],
+  post_purchase: ["post purchase", "post-purchase", "thank you", "customer thank"],
+  winback: ["winback", "win back", "win-back", "re-engage", "lapsed"],
+}
+
+export const DEFAULT_FLOW_MAPPINGS: FlowMappings = {
+  welcome: [],
+  abandoned_cart: [],
+  browse_abandonment: [],
+  post_purchase: [],
+  winback: [],
+}
+
+export function createEmptyFlowMappings(): FlowMappings {
+  return { ...DEFAULT_FLOW_MAPPINGS }
 }

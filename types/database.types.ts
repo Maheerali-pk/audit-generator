@@ -57,6 +57,7 @@ export type Database = {
           api_key_encrypted: string
           client_name: string
           created_at: string | null
+          flow_mappings: Json
           id: string
           last_audit_at: string | null
           last_used_at: string | null
@@ -66,6 +67,7 @@ export type Database = {
           api_key_encrypted: string
           client_name: string
           created_at?: string | null
+          flow_mappings?: Json
           id?: string
           last_audit_at?: string | null
           last_used_at?: string | null
@@ -75,6 +77,7 @@ export type Database = {
           api_key_encrypted?: string
           client_name?: string
           created_at?: string | null
+          flow_mappings?: Json
           id?: string
           last_audit_at?: string | null
           last_used_at?: string | null
