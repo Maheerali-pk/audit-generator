@@ -1,3 +1,30 @@
+// ── Klaviyo POST /api/form-values-reports response ──────────────────
+
+export interface FormValuesReportStatistics {
+  viewed_form: number
+  submits: number
+}
+
+export interface FormValuesReportResult {
+  groupings: {
+    form_id: string
+  }
+  statistics: FormValuesReportStatistics
+}
+
+export interface FormValuesReportResponse {
+  data: {
+    type: "form-values-report"
+    id: string
+    attributes: {
+      results: FormValuesReportResult[]
+    }
+  }
+  links: {
+    self: string
+  }
+}
+
 // ── Klaviyo GET /api/forms response ──────────────────────────────────
 
 export interface KlaviyoFormAttributes {

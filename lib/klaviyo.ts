@@ -12,6 +12,7 @@ import type {
 import type {
   KlaviyoForm,
   KlaviyoFormsResponse,
+  FormValuesReportResponse,
 } from "@/types/forms.types"
 import type {
   KlaviyoEvent,
@@ -321,6 +322,50 @@ export async function getAllForms(
   }
 
   return allForms
+}
+
+/**
+ * Queries form submit rate using the Reporting API (POST /api/form-values-reports).
+ * Returns aggregated { totalViewed, totalSubmits } across all forms.
+ */
+export async function queryFormValuesReport(
+  apiKey: string,
+  timeframeKey: string = "last_12_months"
+): Promise<{ totalViewed: number; totalSubmits: number }> {
+  const body = {
+    data: {
+      type: "form-values-report",
+      attributes: {
+        timeframe: { key: timeframeKey },
+        statistics: ["viewed_form", "submits"],
+      },
+    },
+  }
+
+  const response = await fetch(`${KLAVIYO_BASE_URL}/api/form-values-reports`, {
+    method: "POST",
+    headers: klaviyoHeaders(apiKey),
+    body: JSON.stringify(body),
+  })
+
+  if (!response.ok) {
+    const errorBody = await response.text()
+    throw new Error(
+      `Klaviyo Form Values Report API error (${response.status}): ${errorBody}`
+    )
+  }
+
+  const result: FormValuesReportResponse = await response.json()
+
+  let totalViewed = 0
+  let totalSubmits = 0
+
+  for (const row of result.data.attributes.results) {
+    totalViewed += row.statistics.viewed_form ?? 0
+    totalSubmits += row.statistics.submits ?? 0
+  }
+
+  return { totalViewed, totalSubmits }
 }
 
 // ── Events API ───────────────────────────────────────────────────────

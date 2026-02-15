@@ -9,6 +9,7 @@ import {
   queryMetricAggregateCount,
   queryMetricAggregateCountByEventAndFlow,
   getAllForms,
+  queryFormValuesReport,
   getEventsByMetricId,
   getFlows,
 } from "@/lib/klaviyo"
@@ -187,25 +188,18 @@ export async function POST(
       metrics.total_active_forms = getTotalActiveForms(allForms)
       console.log("[audit] Total active forms:", metrics.total_active_forms)
 
-      // Form submit rate via metric aggregates
-      const submittedFormMetricId = findMetricIdByName(allKlaviyoMetrics!, "Submitted Form")
-      const viewedFormMetricId = findMetricIdByName(allKlaviyoMetrics!, "Viewed Form")
+      // Form submit rate via Reporting API (works even if "Submitted Form" metric doesn't exist)
+      const { totalViewed, totalSubmits } = await queryFormValuesReport(apiKey, "last_30_days")
+      console.log("[audit] Form Values Report — Viewed:", totalViewed, "Submits:", totalSubmits)
+      metrics.form_submit_rate = getFormSubmitRate(totalSubmits, totalViewed)
+      metrics.email_capture_count_30d = totalSubmits
 
-      console.log("[audit] Metric IDs — Submitted Form:", submittedFormMetricId, "Viewed Form:", viewedFormMetricId)
-
+      // Date range for remaining popups/forms metrics
       const now1m = new Date()
       const oneMonthAgoForms = new Date()
       oneMonthAgoForms.setMonth(now1m.getMonth() - 1)
       const formStart = oneMonthAgoForms.toISOString().split("T")[0] + "T00:00:00"
       const formEnd = now1m.toISOString().split("T")[0] + "T00:00:00"
-
-      const submittedCount = await queryMetricAggregateCount(apiKey, submittedFormMetricId, formStart, formEnd)
-      const viewedCount = await queryMetricAggregateCount(apiKey, viewedFormMetricId, formStart, formEnd)
-
-      console.log("[audit] 1m — Submitted Form:", submittedCount, "Viewed Form:", viewedCount)
-
-      metrics.form_submit_rate = getFormSubmitRate(submittedCount, viewedCount)
-      metrics.email_capture_count_30d = submittedCount
 
       // SMS capture count (30d)
       const smsSubscribedMetricId = findMetricIdByName(allKlaviyoMetrics!, "Subscribed to SMS Marketing")
@@ -216,22 +210,27 @@ export async function POST(
       // Email vs SMS capture ratio
       metrics.email_vs_sms_capture_ratio =
         metrics.sms_capture_count_30d > 0
-          ? parseFloat((submittedCount / metrics.sms_capture_count_30d).toFixed(2))
+          ? parseFloat((totalSubmits / metrics.sms_capture_count_30d).toFixed(2))
           : null
       console.log("[audit] Email vs SMS Capture Ratio:", metrics.email_vs_sms_capture_ratio)
 
-      // Form submissions by device (last 30 days)
-      console.log("[audit] Fetching Submitted Form events for device breakdown...")
-      const formEvents = await getEventsByMetricId(apiKey, submittedFormMetricId, formStart)
-      const { desktop, mobile } = getFormSubmissionsByDevice(formEvents)
-      const totalSubmissions = desktop + mobile
-      metrics.form_submissions_desktop = totalSubmissions > 0
-        ? parseFloat(((desktop / totalSubmissions) * 100).toFixed(2))
-        : 0
-      metrics.form_submissions_mobile = totalSubmissions > 0
-        ? parseFloat(((mobile / totalSubmissions) * 100).toFixed(2))
-        : 0
-      console.log("[audit] Form submissions — Desktop:", metrics.form_submissions_desktop + "%", "Mobile:", metrics.form_submissions_mobile + "%")
+      // Form submissions by device (last 30 days) — needs "Submitted Form" metric for events API
+      try {
+        const submittedFormMetricId = findMetricIdByName(allKlaviyoMetrics!, "Submitted Form")
+        console.log("[audit] Fetching Submitted Form events for device breakdown...")
+        const formEvents = await getEventsByMetricId(apiKey, submittedFormMetricId, formStart)
+        const { desktop, mobile } = getFormSubmissionsByDevice(formEvents)
+        const totalSubmissions = desktop + mobile
+        metrics.form_submissions_desktop = totalSubmissions > 0
+          ? parseFloat(((desktop / totalSubmissions) * 100).toFixed(2))
+          : 0
+        metrics.form_submissions_mobile = totalSubmissions > 0
+          ? parseFloat(((mobile / totalSubmissions) * 100).toFixed(2))
+          : 0
+        console.log("[audit] Form submissions — Desktop:", metrics.form_submissions_desktop + "%", "Mobile:", metrics.form_submissions_mobile + "%")
+      } catch (err) {
+        console.warn("[audit] Skipping device breakdown — 'Submitted Form' metric not found:", err instanceof Error ? err.message : err)
+      }
     }
 
     // ── Flows section ────────────────────────────────────────────
