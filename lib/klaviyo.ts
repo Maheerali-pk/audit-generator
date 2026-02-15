@@ -19,6 +19,10 @@ import type {
 } from "@/types/events.types"
 import type {
   KlaviyoFlow,
+  KlaviyoFlowAction,
+  KlaviyoFlowActionsResponse,
+  KlaviyoFlowMessage,
+  KlaviyoFlowMessagesResponse,
   KlaviyoFlowsResponse,
 } from "@/types/flows.types"
 
@@ -48,7 +52,9 @@ export async function getAllProfilesWithSubscriptionData(
   let nextUrl: string | null =
     `${KLAVIYO_BASE_URL}/api/profiles?additional-fields%5Bprofile%5D=subscriptions&page%5Bsize%5D=100`
 
+
   while (nextUrl) {
+    console.log(`profiles fetched: ${allProfiles.length}`)
     const response = await fetch(nextUrl, {
       method: "GET",
       headers: klaviyoHeaders(apiKey),
@@ -131,7 +137,8 @@ export async function queryMetricAggregateCount(
   metricId: string,
   startDate: string,
   endDate: string,
-  measurement: MetricMeasurement = "count"
+  measurement: MetricMeasurement = "count",
+  extraFilters: string[] = []
 ): Promise<number> {
   const body: MetricAggregateRequest = {
     data: {
@@ -142,6 +149,7 @@ export async function queryMetricAggregateCount(
         filter: [
           `greater-or-equal(datetime,${startDate})`,
           `less-than(datetime,${endDate})`,
+          ...extraFilters,
         ],
         interval: "month",
         timezone: "US/Eastern",
@@ -165,6 +173,86 @@ export async function queryMetricAggregateCount(
   const result: MetricAggregateResponse = await response.json()
 
   // Sum all values across all date buckets and data points
+  let total = 0
+  for (const dataPoint of result.data.attributes.data) {
+    const values = dataPoint.measurements[measurement] ?? []
+    for (const v of values) {
+      total += v
+    }
+  }
+
+  return total
+}
+
+/**
+ * Generic function: queries the metric-aggregates endpoint filtered by
+ * a specific flow. Resolves flow ID and metric ID from their names.
+ * Returns the total count across all date buckets.
+ */
+export async function queryMetricAggregateCountByEventAndFlow(
+  apiKey: string,
+  allMetrics: KlaviyoMetric[],
+  allFlows: KlaviyoFlow[],
+  metricName: string,
+  flowName: string,
+  startDate: string,
+  endDate: string,
+  measurement: MetricMeasurement = "count",
+  flowAttribute: "$flow" | "$attributed_flow" = "$flow"
+): Promise<number> {
+  const metricId = findMetricIdByName(allMetrics, metricName)
+
+  // Fuzzy match: first try exact, then try contains
+  const flowNameLower = flowName.toLowerCase()
+  let flow = allFlows.find(
+    (f) => f.attributes.name.toLowerCase() === flowNameLower
+  )
+  if (!flow) {
+    flow = allFlows.find(
+      (f) => f.attributes.name.toLowerCase().includes(flowNameLower)
+    )
+  }
+  if (!flow) {
+    console.warn(
+      `[klaviyo] Flow "${flowName}" not found. Available flows:`,
+      allFlows.map((f) => f.attributes.name)
+    )
+    return 0
+  }
+  console.log(`[klaviyo] Matched flow "${flowName}" → "${flow.attributes.name}" (${flow.id})`)
+
+  const body: MetricAggregateRequest = {
+    data: {
+      type: "metric-aggregate",
+      attributes: {
+        metric_id: metricId,
+        measurements: [measurement],
+        filter: [
+          `greater-or-equal(datetime,${startDate})`,
+          `less-than(datetime,${endDate})`,
+          `equals(${flowAttribute},"${flow.id}")`,
+        ],
+        interval: "month",
+        timezone: "US/Eastern",
+      },
+    },
+  }
+
+  const response = await fetch(`${KLAVIYO_BASE_URL}/api/metric-aggregates`, {
+    method: "POST",
+    headers: klaviyoHeaders(apiKey),
+    body: JSON.stringify(body),
+  })
+
+  if (!response.ok) {
+    const errorBody = await response.text()
+    throw new Error(
+      `Klaviyo Metric Aggregates API error (${response.status}): ${errorBody}`
+    )
+  }
+
+  const result: MetricAggregateResponse = await response.json()
+
   let total = 0
   for (const dataPoint of result.data.attributes.data) {
     const values = dataPoint.measurements[measurement] ?? []
@@ -282,3 +370,55 @@ export async function getFlows(
 
   return allFlows
 }
+// export async function getFlowIdsByName(apiKey: string, names: string[]): Promise<string[]> {
+//   const flows = await getFlows(apiKey)
+//   return flows.filter(flow => names.includes(flow.attributes.name)).map(flow => flow.id)
+// }
+// export const getFlowActionsByFlowId = async (apiKey: string, flowId: string): Promise<KlaviyoFlowAction[]> => {
+//   const response = await fetch(`${KLAVIYO_BASE_URL}/api/flows/${flowId}/flow-actions`, {
+//     method: "GET",
+//     headers: klaviyoHeaders(apiKey),
+//   })
+//   if (!response.ok) {
+//     const errorBody = await response.text()
+//     throw new Error(
+//       `Klaviyo Flow Actions API error (${response.status}): ${errorBody}`
+//     )
+//   }
+//   const data: KlaviyoFlowActionsResponse = await response.json()
+//   return data.data
+// }
+// export const getActionIdsByActionType = (actions: KlaviyoFlowAction[], actionType: string): string[] => {
+//   return actions.filter(action => action.attributes.action_type === actionType).map(action => action.id)
+// }
+
+// export const getFlowMessagesByActionId = async (apiKey: string, actionId: string): Promise<KlaviyoFlowMessage[]> => {
+//   const response = await fetch(`${KLAVIYO_BASE_URL}/api/flow-actions/${actionId}/flow-messages`, {
+//     method: "GET",
+//     headers: klaviyoHeaders(apiKey),
+//   })
+//   if (!response.ok) {
+//     const errorBody = await response.text()
+//     throw new Error(
+//       `Klaviyo Flow Messages API error (${response.status}): ${errorBody}`
+//     )
+//   }
+//   const data: KlaviyoFlowMessagesResponse = await response.json()
+//   return data.data
+// }
+// export const convertFlowMessagesToIds = (messages: KlaviyoFlowMessage[]): string[] => messages.map(message => message.id)
+
+
+// export const getMetricCountByFlowName = async (apiKey: string, flowName: string): Promise<number> => {
+//   const actionName = "SEND_EMAIL"
+//   const flowIds = await getFlowIdsByName(apiKey, [flowName])
+//   const flowActions = (await Promise.all(flowIds.map(async (flowId) => await getFlowActionsByFlowId(apiKey, flowId)))).flat()
+//   const actionIds = flowActions.flatMap((actions) => getActionIdsByActionType(flowActions, "SEND_EMAIL"))
+//   const flowMessages = (await Promise.all(actionIds.map(async (actionId) => await getFlowMessagesByActionId(apiKey, actionId)))).flat()
+//   const messageIds = convertFlowMessagesToIds(flowMessages)
+
+
+
+
+// }
+// }
