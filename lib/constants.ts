@@ -73,15 +73,12 @@ export const AUDIT_METRIC_META: Record<keyof AuditMetrics, MetricMeta> = {
 
   // Deliverability & Technical Health
   overall_bounce_rate: { label: "Overall Bounce Rate", format: "percent", section: "Deliverability" },
-  hard_bounce_rate: { label: "Hard Bounce Rate", format: "percent", section: "Deliverability" },
   spam_complaint_rate: { label: "Spam Complaint Rate", format: "percent", section: "Deliverability" },
   overall_open_rate: { label: "Overall Open Rate", format: "percent", section: "Deliverability" },
   email_deliverability_rate: { label: "Email Deliverability Rate", format: "percent", section: "Deliverability" },
-  suppressed_profile_count: { label: "Suppressed Profile Count", format: "number", section: "Deliverability" },
   integration_active: { label: "Integration Active?", format: "boolean", section: "Deliverability" },
   total_email_revenue_30d: { label: "Total Email Revenue (30d)", format: "currency", section: "Deliverability" },
   total_email_revenue_90d: { label: "Total Email Revenue (90d)", format: "currency", section: "Deliverability" },
-  email_revenue_pct_of_total: { label: "Email Revenue as % of Total Revenue", format: "percent", section: "Deliverability" },
 }
 
 // ── Audit Sections (feature checkboxes) ──────────────────────────────
@@ -112,6 +109,11 @@ export const AUDIT_SECTIONS: AuditSection[] = [
     id: "campaigns",
     label: "Campaigns",
     description: "Campaign send volume and performance metrics",
+  },
+  {
+    id: "technical_health",
+    label: "Technical Health",
+    description: "Deliverability, bounce rates, spam complaints, and email revenue",
   },
 ]
 

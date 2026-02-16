@@ -56,15 +56,12 @@ export interface AuditMetrics {
 
   // ── DELIVERABILITY & TECHNICAL HEALTH ─────────────────────────────
   overall_bounce_rate: number | null
-  hard_bounce_rate: number | null
   spam_complaint_rate: number | null
   overall_open_rate: number | null
   email_deliverability_rate: number | null
-  suppressed_profile_count: number | null
   integration_active: boolean | null
   total_email_revenue_30d: number | null
   total_email_revenue_90d: number | null
-  email_revenue_pct_of_total: number | null
 }
 
 // ── Audit Report Row (matches Supabase audit_reports table) ──────────
@@ -140,14 +137,11 @@ export function createEmptyMetrics(): AuditMetrics {
 
     // Deliverability & Technical Health
     overall_bounce_rate: null,
-    hard_bounce_rate: null,
     spam_complaint_rate: null,
     overall_open_rate: null,
     email_deliverability_rate: null,
-    suppressed_profile_count: null,
     integration_active: null,
     total_email_revenue_30d: null,
     total_email_revenue_90d: null,
-    email_revenue_pct_of_total: null,
   }
 }

@@ -45,7 +45,7 @@ export async function POST(
     const body = await request.json()
     sections = body.sections ?? []
   } catch {
-    sections = ["email_marketing", "popups_forms", "campaigns"] // default: all
+    sections = ["email_marketing", "popups_forms", "campaigns", "technical_health"] // default: all
   }
 
   console.log("[audit] Starting audit for account:", id, "sections:", sections)
@@ -115,7 +115,7 @@ export async function POST(
 
     // Fetch Klaviyo metrics list once (shared across sections that need aggregates)
     const needsMetricsList =
-      sections.includes("email_marketing") || sections.includes("popups_forms") || sections.includes("campaigns")
+      sections.includes("email_marketing") || sections.includes("popups_forms") || sections.includes("campaigns") || sections.includes("technical_health")
     const allKlaviyoMetrics = needsMetricsList
       ? await getAllMetrics(apiKey)
       : null
@@ -514,6 +514,98 @@ export async function POST(
         ? parseFloat(((metrics.campaign_revenue_90d! / totalEmailRevenue) * 100).toFixed(2))
         : null
       console.log("[audit] Campaign Revenue as % of Total Email Revenue:", metrics.campaign_revenue_pct_of_total)
+    }
+
+    // ── Technical Health section ──────────────────────────────────
+    if (sections.includes("technical_health")) {
+      console.log("[audit] Running Technical Health section...")
+
+      const thMetrics = allKlaviyoMetrics ?? await getAllMetrics(apiKey)
+
+      // Resolve metric IDs
+      const bouncedMetricId = findMetricIdByName(thMetrics, "Bounced Email")
+      const receivedMetricId = findMetricIdByName(thMetrics, "Received Email")
+      const spamMetricId = findMetricIdByName(thMetrics, "Marked Email as Spam")
+      const openedMetricId = findMetricIdByName(thMetrics, "Opened Email")
+
+      console.log("[audit] Technical Health metric IDs — Bounced:", bouncedMetricId, "Received:", receivedMetricId, "Spam:", spamMetricId, "Opened:", openedMetricId)
+
+      // Date range (90d window)
+      const now = new Date()
+      const ninetyDaysAgo = new Date()
+      ninetyDaysAgo.setDate(now.getDate() - 90)
+
+      const start90d = ninetyDaysAgo.toISOString().split("T")[0] + "T00:00:00"
+      const endDate = now.toISOString().split("T")[0] + "T00:00:00"
+
+      const bouncedCount = await queryMetricAggregateCount(apiKey, bouncedMetricId, start90d, endDate)
+      const receivedCount = await queryMetricAggregateCount(apiKey, receivedMetricId, start90d, endDate)
+      const spamCount = await queryMetricAggregateCount(apiKey, spamMetricId, start90d, endDate)
+      const openedCount = await queryMetricAggregateCount(apiKey, openedMetricId, start90d, endDate)
+
+      console.log("[audit] 90d — Bounced:", bouncedCount, "Received:", receivedCount, "Spam:", spamCount, "Opened:", openedCount)
+
+      // Overall Bounce Rate = Bounced / Received * 100
+      metrics.overall_bounce_rate = receivedCount > 0
+        ? parseFloat(((bouncedCount / receivedCount) * 100).toFixed(2))
+        : null
+
+      // Spam Complaint Rate = Marked as Spam / Received * 100
+      metrics.spam_complaint_rate = receivedCount > 0
+        ? parseFloat(((spamCount / receivedCount) * 100).toFixed(4))
+        : null
+
+      // Overall Open Rate = Opened / Received * 100
+      metrics.overall_open_rate = receivedCount > 0
+        ? parseFloat(((openedCount / receivedCount) * 100).toFixed(2))
+        : null
+
+      // Email Deliverability Rate = Received / (Received + Bounced) * 100
+      const totalSent = receivedCount + bouncedCount
+      metrics.email_deliverability_rate = totalSent > 0
+        ? parseFloat(((receivedCount / totalSent) * 100).toFixed(2))
+        : null
+
+      // Integration Active? — check for recent "Placed Order" events (last 7 days)
+      // Also compute email revenue (30d & 90d) if Placed Order metric exists
+      try {
+        const placedOrderMetricId = findMetricIdByName(thMetrics, "Placed Order")
+        const sevenDaysAgo = new Date()
+        sevenDaysAgo.setDate(now.getDate() - 7)
+        const start7d = sevenDaysAgo.toISOString().split("T")[0] + "T00:00:00"
+
+        const recentOrderCount = await queryMetricAggregateCount(apiKey, placedOrderMetricId, start7d, endDate)
+        metrics.integration_active = recentOrderCount > 0
+        console.log("[audit] Integration Active:", metrics.integration_active, "(recent Placed Orders in 7d:", recentOrderCount + ")")
+
+        // Total Email Revenue (30d) — Placed Order $ attributed to email
+        const thirtyDaysAgo = new Date()
+        thirtyDaysAgo.setDate(now.getDate() - 30)
+        const start30d = thirtyDaysAgo.toISOString().split("T")[0] + "T00:00:00"
+
+        const emailRevenue30d = await queryMetricAggregateCount(
+          apiKey, placedOrderMetricId, start30d, endDate, "sum_value",
+          ['not(equals($attributed_message,""))']
+        )
+        metrics.total_email_revenue_30d = parseFloat(emailRevenue30d.toFixed(2))
+        console.log("[audit] Total Email Revenue (30d):", metrics.total_email_revenue_30d)
+
+        // Total Email Revenue (90d) — Placed Order $ attributed to email
+        const emailRevenue90d = await queryMetricAggregateCount(
+          apiKey, placedOrderMetricId, start90d, endDate, "sum_value",
+          ['not(equals($attributed_message,""))']
+        )
+        metrics.total_email_revenue_90d = parseFloat(emailRevenue90d.toFixed(2))
+        console.log("[audit] Total Email Revenue (90d):", metrics.total_email_revenue_90d)
+      } catch {
+        metrics.integration_active = false
+        console.log("[audit] Integration Active: false (Placed Order metric not found)")
+      }
+
+      console.log("[audit] Overall Bounce Rate:", metrics.overall_bounce_rate + "%")
+      console.log("[audit] Spam Complaint Rate:", metrics.spam_complaint_rate + "%")
+      console.log("[audit] Overall Open Rate:", metrics.overall_open_rate + "%")
+      console.log("[audit] Email Deliverability Rate:", metrics.email_deliverability_rate + "%")
     }
 
     const runtimeSeconds = Math.round((Date.now() - startTime) / 1000)
