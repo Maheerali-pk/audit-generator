@@ -12,6 +12,8 @@ import {
   queryFormValuesReport,
   getEventsByMetricId,
   getFlows,
+  getSentCampaigns,
+  queryCampaignValuesReport,
 } from "@/lib/klaviyo"
 import { createEmptyMetrics } from "@/types/audit.types"
 import type { Json } from "@/types/database.types"
@@ -43,7 +45,7 @@ export async function POST(
     const body = await request.json()
     sections = body.sections ?? []
   } catch {
-    sections = ["email_marketing", "popups_forms"] // default: all
+    sections = ["email_marketing", "popups_forms", "campaigns"] // default: all
   }
 
   console.log("[audit] Starting audit for account:", id, "sections:", sections)
@@ -113,7 +115,7 @@ export async function POST(
 
     // Fetch Klaviyo metrics list once (shared across sections that need aggregates)
     const needsMetricsList =
-      sections.includes("email_marketing") || sections.includes("popups_forms")
+      sections.includes("email_marketing") || sections.includes("popups_forms") || sections.includes("campaigns")
     const allKlaviyoMetrics = needsMetricsList
       ? await getAllMetrics(apiKey)
       : null
@@ -297,13 +299,15 @@ export async function POST(
         )
       }
 
-      await new Promise(resolve => setTimeout(resolve, 500));
+
+      await new Promise(resolve => setTimeout(resolve, 1000));
       console.log("[audit] Welcome Flow — Revenue:", metrics.welcome_flow_revenue)
 
       // Abandoned Cart Flow
       const acFlowNames = getFlowNames("abandoned_cart")
       metrics.abandoned_cart_open_rate = await computeFlowRate(acFlowNames, "Opened Email")
       metrics.abandoned_cart_click_rate = await computeFlowRate(acFlowNames, "Clicked Email")
+      await new Promise(resolve => setTimeout(resolve, 1000));
 
       // Abandoned Cart — Recovery Rate (Placed Order by AC / Received Email for AC)
       if (acFlowNames.length > 0) {
@@ -321,20 +325,27 @@ export async function POST(
           : null
       }
 
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
       // Browse Abandonment Flow
       const browseFlowNames = getFlowNames("browse_abandonment")
       metrics.browse_abandonment_open_rate = await computeFlowRate(browseFlowNames, "Opened Email")
       metrics.browse_abandonment_click_rate = await computeFlowRate(browseFlowNames, "Clicked Email")
 
+      await new Promise(resolve => setTimeout(resolve, 1000));
       // Post-Purchase Flow
       const postPurchaseFlowNames = getFlowNames("post_purchase")
       metrics.post_purchase_open_rate = await computeFlowRate(postPurchaseFlowNames, "Opened Email")
       metrics.post_purchase_click_rate = await computeFlowRate(postPurchaseFlowNames, "Clicked Email")
 
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
       // Winback Flow
       const winbackFlowNames = getFlowNames("winback")
       metrics.winback_open_rate = await computeFlowRate(winbackFlowNames, "Opened Email")
       metrics.winback_click_rate = await computeFlowRate(winbackFlowNames, "Clicked Email")
+
+      await new Promise(resolve => setTimeout(resolve, 1000));
 
       // Flow Revenue as % of Total Email Revenue
       const placedOrderMetricId = findMetricIdByName(flowMetricsList, "Placed Order")
@@ -344,11 +355,14 @@ export async function POST(
       const totalEmailRevenue = await queryMetricAggregateCount(
         apiKey, placedOrderMetricId, flowStart, flowEnd, "sum_value"
       )
+      await new Promise(resolve => setTimeout(resolve, 1000));
       // Non-flow revenue (attributed_flow is empty)
       const nonFlowRevenue = await queryMetricAggregateCount(
         apiKey, placedOrderMetricId, flowStart, flowEnd, "sum_value",
         ['equals($attributed_flow,"")']
       )
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
 
       const flowRevenue = totalEmailRevenue - nonFlowRevenue
       console.log("[audit] Revenue — Total:", totalEmailRevenue, "Non-flow:", nonFlowRevenue, "Flow:", flowRevenue)
@@ -356,6 +370,150 @@ export async function POST(
       metrics.flow_revenue_pct_of_total = totalEmailRevenue > 0
         ? parseFloat(((flowRevenue / totalEmailRevenue) * 100).toFixed(2))
         : null
+    }
+
+    // ── Campaigns section ─────────────────────────────────────────
+    if (sections.includes("campaigns")) {
+      console.log("[audit] Running Campaigns section...")
+
+      // Fetch campaigns sent in last 90 days (superset of 30d)
+      const now = new Date()
+      const ninetyDaysAgo = new Date()
+      ninetyDaysAgo.setDate(now.getDate() - 90)
+      const since90d = ninetyDaysAgo.toISOString().split("T")[0]
+
+      const campaigns = await getSentCampaigns(apiKey, since90d)
+      console.log("[audit] Total campaigns fetched (90d window):", campaigns.length)
+
+      // Filter precisely using send_time
+      const thirtyDaysAgo = new Date()
+      thirtyDaysAgo.setDate(now.getDate() - 30)
+
+      const sentIn90d = campaigns.filter((c) => c.attributes.send_time != null)
+      const sentIn30d = sentIn90d.filter(
+        (c) => new Date(c.attributes.send_time!) >= thirtyDaysAgo
+      )
+
+      metrics.total_campaigns_sent_30d = sentIn30d.length
+      metrics.total_campaigns_sent_90d = sentIn90d.length
+
+      console.log("[audit] Campaigns sent — 30d:", metrics.total_campaigns_sent_30d, "90d:", metrics.total_campaigns_sent_90d)
+
+      // Campaign performance metrics via Reporting API (Campaign Values)
+      const campaignMetricsList = allKlaviyoMetrics ?? await getAllMetrics(apiKey)
+      const placedOrderId = findMetricIdByName(campaignMetricsList, "Placed Order")
+
+      // 90d call — get rates + revenue in a single request
+      const results90d = await queryCampaignValuesReport(
+        apiKey,
+        ["open_rate", "click_rate", "unsubscribe_rate", "bounce_rate", "conversion_value"],
+        "last_90_days",
+        placedOrderId
+      )
+      console.log("[audit] Campaign Values Report (90d) — campaigns returned:", results90d.length)
+
+      if (results90d.length > 0) {
+        // Average rates across all campaigns (API returns fractional [0, 1])
+        const avgOpenRate = results90d.reduce((sum, r) => sum + (r.statistics.open_rate ?? 0), 0) / results90d.length
+        const avgClickRate = results90d.reduce((sum, r) => sum + (r.statistics.click_rate ?? 0), 0) / results90d.length
+        const avgUnsubRate = results90d.reduce((sum, r) => sum + (r.statistics.unsubscribe_rate ?? 0), 0) / results90d.length
+        const avgBounceRate = results90d.reduce((sum, r) => sum + (r.statistics.bounce_rate ?? 0), 0) / results90d.length
+
+        metrics.avg_campaign_open_rate = parseFloat((avgOpenRate * 100).toFixed(2))
+        metrics.avg_campaign_click_rate = parseFloat((avgClickRate * 100).toFixed(2))
+        metrics.avg_campaign_unsubscribe_rate = parseFloat((avgUnsubRate * 100).toFixed(2))
+        metrics.avg_campaign_bounce_rate = parseFloat((avgBounceRate * 100).toFixed(2))
+
+        // 90d revenue — sum across all campaigns
+        metrics.campaign_revenue_90d = parseFloat(
+          results90d.reduce((sum, r) => sum + (r.statistics.conversion_value ?? 0), 0).toFixed(2)
+        )
+
+        console.log("[audit] Campaign Avg Open Rate:", metrics.avg_campaign_open_rate + "%")
+        console.log("[audit] Campaign Avg Click Rate:", metrics.avg_campaign_click_rate + "%")
+        console.log("[audit] Campaign Avg Unsubscribe Rate:", metrics.avg_campaign_unsubscribe_rate + "%")
+        console.log("[audit] Campaign Avg Open Rate:", metrics.avg_campaign_open_rate + "%")
+        console.log("[audit] Campaign Avg Click Rate:", metrics.avg_campaign_click_rate + "%")
+        console.log("[audit] Campaign Avg Unsubscribe Rate:", metrics.avg_campaign_unsubscribe_rate + "%")
+        console.log("[audit] Campaign Avg Bounce Rate:", metrics.avg_campaign_bounce_rate + "%")
+        console.log("[audit] Campaign Revenue (90d):", metrics.campaign_revenue_90d)
+      }
+
+      // Respect burst rate limit (1/s) before next reporting call
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // 30d call — revenue + recipients
+      const results30d = await queryCampaignValuesReport(
+        apiKey,
+        ["conversion_value", "recipients", "open_rate"],
+        "last_30_days",
+        placedOrderId
+      )
+      console.log("[audit] Campaign Values Report (30d) — campaigns returned:", results30d.length)
+
+      metrics.campaign_revenue_30d = parseFloat(
+        results30d.reduce((sum, r) => sum + (r.statistics.conversion_value ?? 0), 0).toFixed(2)
+      )
+
+      // Revenue per recipient (avg) — total 30d revenue / total 30d recipients
+      const totalRecipients30d = results30d.reduce((sum, r) => sum + (r.statistics.recipients ?? 0), 0)
+      metrics.revenue_per_recipient_avg = totalRecipients30d > 0
+        ? parseFloat((metrics.campaign_revenue_30d / totalRecipients30d).toFixed(4))
+        : null
+
+      // Top campaign by revenue (30d)
+      if (results30d.length > 0) {
+        const topResult = results30d.reduce((best, r) =>
+          (r.statistics.conversion_value ?? 0) > (best.statistics.conversion_value ?? 0) ? r : best
+        )
+        const topCampaignId = topResult.groupings.campaign_id
+        const topCampaign = campaigns.find((c) => c.id === topCampaignId)
+
+        metrics.top_campaign_by_revenue_name = topCampaign?.attributes.name ?? topCampaignId
+        metrics.top_campaign_by_revenue_value = parseFloat(
+          (topResult.statistics.conversion_value ?? 0).toFixed(2)
+        )
+        console.log("[audit] Top Campaign by Revenue (30d):", metrics.top_campaign_by_revenue_name, "—", metrics.top_campaign_by_revenue_value)
+      }
+
+      // Bottom campaign by open rate (30d)
+      if (results30d.length > 0) {
+        const bottomResult = results30d.reduce((worst, r) =>
+          (r.statistics.open_rate ?? 1) < (worst.statistics.open_rate ?? 1) ? r : worst
+        )
+        const bottomCampaignId = bottomResult.groupings.campaign_id
+        const bottomCampaign = campaigns.find((c) => c.id === bottomCampaignId)
+
+        metrics.bottom_campaign_by_open_rate_name = bottomCampaign?.attributes.name ?? bottomCampaignId
+        metrics.bottom_campaign_by_open_rate_value = parseFloat(
+          ((bottomResult.statistics.open_rate ?? 0) * 100).toFixed(2)
+        )
+        console.log("[audit] Bottom Campaign by Open Rate (30d):", metrics.bottom_campaign_by_open_rate_name, "—", metrics.bottom_campaign_by_open_rate_value + "%")
+      }
+
+      console.log("[audit] Campaign Revenue (30d):", metrics.campaign_revenue_30d)
+      console.log("[audit] Revenue Per Recipient (Avg, 30d):", metrics.revenue_per_recipient_avg)
+
+      // Campaign revenue as % of total email revenue (90d)
+      const campaignMetrics = allKlaviyoMetrics ?? await getAllMetrics(apiKey)
+      const placedOrderMetricId = findMetricIdByName(campaignMetrics, "Placed Order")
+
+      const now90d = new Date()
+      const ninetyDaysAgoCamp = new Date()
+      ninetyDaysAgoCamp.setDate(now90d.getDate() - 90)
+      const campStart = ninetyDaysAgoCamp.toISOString().split("T")[0] + "T00:00:00"
+      const campEnd = now90d.toISOString().split("T")[0] + "T00:00:00"
+
+      const totalEmailRevenue = await queryMetricAggregateCount(
+        apiKey, placedOrderMetricId, campStart, campEnd, "sum_value",
+        ['not(equals($attributed_message,""))']
+      )
+      console.log("[audit] Total Email Revenue (90d):", totalEmailRevenue)
+
+      metrics.campaign_revenue_pct_of_total = totalEmailRevenue > 0
+        ? parseFloat(((metrics.campaign_revenue_90d! / totalEmailRevenue) * 100).toFixed(2))
+        : null
+      console.log("[audit] Campaign Revenue as % of Total Email Revenue:", metrics.campaign_revenue_pct_of_total)
     }
 
     const runtimeSeconds = Math.round((Date.now() - startTime) / 1000)

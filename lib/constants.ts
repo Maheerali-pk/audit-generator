@@ -108,6 +108,11 @@ export const AUDIT_SECTIONS: AuditSection[] = [
     label: "Flows",
     description: "Active flows, flow performance, and revenue attribution",
   },
+  {
+    id: "campaigns",
+    label: "Campaigns",
+    description: "Campaign send volume and performance metrics",
+  },
 ]
 
 // ── Format a metric value for display ────────────────────────────────

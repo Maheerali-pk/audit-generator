@@ -26,6 +26,13 @@ import type {
   KlaviyoFlowMessagesResponse,
   KlaviyoFlowsResponse,
 } from "@/types/flows.types"
+import type {
+  KlaviyoCampaign,
+  KlaviyoCampaignsResponse,
+  CampaignValuesStatistic,
+  CampaignValuesReportResult,
+  CampaignValuesReportResponse,
+} from "@/types/campaigns.types"
 
 export const KLAVIYO_BASE_URL = "https://a.klaviyo.com"
 
@@ -442,6 +449,104 @@ export async function getFlows(
 
   return allFlows
 }
+
+// ── Campaigns API ─────────────────────────────────────────────────────
+
+/**
+ * Fetches sent email campaigns from Klaviyo since a given date, handling pagination.
+ * Includes both "Sent" and "Variations Sent" (A/B tests) statuses.
+ */
+export async function getSentCampaigns(
+  apiKey: string,
+  sinceDate: string
+): Promise<KlaviyoCampaign[]> {
+  const filter = [
+    "equals(messages.channel,'email')",
+    "any(status,['Sent'])",
+    `greater-or-equal(updated_at,${sinceDate})`,
+  ].join(",")
+
+  const allCampaigns: KlaviyoCampaign[] = []
+  let nextUrl: string | null =
+    `${KLAVIYO_BASE_URL}/api/campaigns?filter=${encodeURIComponent(filter)}`
+
+  while (nextUrl) {
+    const response = await fetch(nextUrl, {
+      method: "GET",
+      headers: klaviyoHeaders(apiKey),
+    })
+
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(
+        `Klaviyo Campaigns API error (${response.status}): ${errorBody}`
+      )
+    }
+
+    const data: KlaviyoCampaignsResponse = await response.json()
+    allCampaigns.push(...data.data)
+    nextUrl = data.links.next ?? null
+  }
+
+  return allCampaigns
+}
+
+/**
+ * Queries the Campaign Values Reporting API (POST /api/campaign-values-reports).
+ * Returns per-campaign results with the requested statistics.
+ *
+ * Rate limits: Burst 1/s, Steady 2/m, Daily 225/d
+ */
+export async function queryCampaignValuesReport(
+  apiKey: string,
+  statistics: CampaignValuesStatistic[],
+  timeframeKey: string,
+  conversionMetricId: string,
+  filterStr?: string
+): Promise<CampaignValuesReportResult[]> {
+  const body: Record<string, unknown> = {
+    data: {
+      type: "campaign-values-report",
+      attributes: {
+        statistics,
+        timeframe: { key: timeframeKey },
+        conversion_metric_id: conversionMetricId,
+        filter: filterStr ?? "equals(send_channel,\"email\")",
+      },
+    },
+  }
+
+  let allResults: CampaignValuesReportResult[] = []
+  let url: string | null = `${KLAVIYO_BASE_URL}/api/campaign-values-reports`
+  let isFirstRequest = true
+
+  while (url) {
+    if (!isFirstRequest) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: klaviyoHeaders(apiKey),
+      ...(isFirstRequest ? { body: JSON.stringify(body) } : {}),
+    })
+
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(
+        `Klaviyo Campaign Values Report API error (${response.status}): ${errorBody}`
+      )
+    }
+
+    const result: CampaignValuesReportResponse = await response.json()
+    allResults.push(...result.data.attributes.results)
+    url = result.links?.next ?? null
+    isFirstRequest = false
+  }
+
+  return allResults
+}
+
 // export async function getFlowIdsByName(apiKey: string, names: string[]): Promise<string[]> {
 //   const flows = await getFlows(apiKey)
 //   return flows.filter(flow => names.includes(flow.attributes.name)).map(flow => flow.id)
