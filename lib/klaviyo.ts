@@ -134,6 +134,90 @@ export function findMetricIdByName(
   return metric.id
 }
 
+// ── Segments API ─────────────────────────────────────────────────────
+
+export interface KlaviyoSegment {
+  type: "segment"
+  id: string
+  attributes: {
+    name: string
+    created: string
+    updated: string
+    is_active: boolean
+    is_processing: boolean
+    is_starred: boolean
+    profile_count?: number
+  }
+}
+
+interface KlaviyoSegmentsResponse {
+  data: KlaviyoSegment[]
+  links: {
+    self: string
+    next: string | null
+  }
+}
+
+interface KlaviyoSegmentResponse {
+  data: KlaviyoSegment
+}
+
+/**
+ * Fetches ALL segments from the Klaviyo account, handling pagination.
+ */
+export async function getAllSegments(
+  apiKey: string
+): Promise<KlaviyoSegment[]> {
+  const allSegments: KlaviyoSegment[] = []
+  let nextUrl: string | null = `${KLAVIYO_BASE_URL}/api/segments`
+
+  while (nextUrl) {
+    const response = await fetch(nextUrl, {
+      method: "GET",
+      headers: klaviyoHeaders(apiKey),
+    })
+
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(
+        `Klaviyo Segments API error (${response.status}): ${errorBody}`
+      )
+    }
+
+    const data: KlaviyoSegmentsResponse = await response.json()
+    allSegments.push(...data.data)
+    nextUrl = data.links.next ?? null
+  }
+
+  return allSegments
+}
+
+/**
+ * Fetches a single segment with profile_count using additional-fields.
+ */
+export async function getSegmentProfileCount(
+  apiKey: string,
+  segmentId: string
+): Promise<number> {
+  const response = await fetch(
+    `${KLAVIYO_BASE_URL}/api/segments/${segmentId}?additional-fields[segment]=profile_count`,
+    {
+      method: "GET",
+      headers: klaviyoHeaders(apiKey),
+    }
+  )
+
+  if (!response.ok) {
+    const errorBody = await response.text()
+    throw new Error(
+      `Klaviyo Segment API error (${response.status}): ${errorBody}`
+    )
+  }
+
+  const data: KlaviyoSegmentResponse = await response.json()
+  return data.data.attributes.profile_count ?? 0
+}
+
 // ── Metric Aggregates API ────────────────────────────────────────────
 
 /**

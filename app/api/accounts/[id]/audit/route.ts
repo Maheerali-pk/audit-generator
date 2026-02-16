@@ -3,7 +3,6 @@ import { createClient } from "@/lib/supabase/server"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { decrypt } from "@/lib/encryption"
 import {
-  getAllProfilesWithSubscriptionData,
   getAllMetrics,
   findMetricIdByName,
   queryMetricAggregateCount,
@@ -14,15 +13,13 @@ import {
   getFlows,
   getSentCampaigns,
   queryCampaignValuesReport,
+  getAllSegments,
+  getSegmentProfileCount,
 } from "@/lib/klaviyo"
 import { createEmptyMetrics } from "@/types/audit.types"
 import type { Json } from "@/types/database.types"
 import type { FlowMappings, FlowMappingEntry } from "@/types/custom-config.types"
 import {
-  getActiveEmailSubscribers,
-  getSuppressedProfilesPercent,
-  getSuppressedProfiles,
-  getNewSubscribers,
   getUnsubscribeRate,
   getListGrowthRate,
   getTotalActiveForms,
@@ -124,16 +121,64 @@ export async function POST(
     if (sections.includes("email_marketing")) {
       console.log("[audit] Running Email Marketing section...")
 
-      // Fetch all profiles with subscription data
-      const profiles = await getAllProfilesWithSubscriptionData(apiKey)
+      // Fetch all segments and find the ones we need by name
+      const allSegments = await getAllSegments(apiKey)
+      console.log("[audit] Total segments fetched:", allSegments.length)
 
-      // Profile-based metrics
-      metrics.total_profiles = profiles.length
-      metrics.active_email_subscribers = getActiveEmailSubscribers(profiles)
-      metrics.suppressed_profiles = getSuppressedProfiles(profiles)
-      metrics.suppressed_profiles_pct = getSuppressedProfilesPercent(profiles)
-      metrics.new_subscribers_30d = getNewSubscribers(profiles, 30)
-      metrics.new_subscribers_90d = getNewSubscribers(profiles, 90)
+      const segmentNameMap: Record<string, string> = {
+        "All profiles": "total_profiles",
+        "Active Email Subscribers": "active_email_subscribers",
+        "Suppressed Profiles": "suppressed_profiles",
+        "New Subscribers (30d)": "new_subscribers_30d",
+        "New Subscribers (90d)": "new_subscribers_90d",
+      }
+
+      const matchedSegments: Record<string, string> = {}
+      for (const [segName, metricKey] of Object.entries(segmentNameMap)) {
+        const segment = allSegments.find(
+          (s) => s.attributes.name.toLowerCase() === segName.toLowerCase()
+        )
+        if (segment) {
+          matchedSegments[metricKey] = segment.id
+          console.log(`[audit] Matched segment "${segName}" → ${segment.id}`)
+        } else {
+          console.warn(`[audit] Segment "${segName}" not found`)
+        }
+      }
+
+      // Fetch profile_count for each matched segment (1/s rate limit)
+      if (matchedSegments.total_profiles) {
+        metrics.total_profiles = await getSegmentProfileCount(apiKey, matchedSegments.total_profiles)
+        console.log("[audit] Total Profiles:", metrics.total_profiles)
+      }
+      if (matchedSegments.active_email_subscribers) {
+        await new Promise(resolve => setTimeout(resolve, 1000))
+        metrics.active_email_subscribers = await getSegmentProfileCount(apiKey, matchedSegments.active_email_subscribers)
+        console.log("[audit] Active Email Subscribers:", metrics.active_email_subscribers)
+      }
+      if (matchedSegments.new_subscribers_30d) {
+        await new Promise(resolve => setTimeout(resolve, 1000))
+        metrics.new_subscribers_30d = await getSegmentProfileCount(apiKey, matchedSegments.new_subscribers_30d)
+        console.log("[audit] New Subscribers (30d):", metrics.new_subscribers_30d)
+      }
+      if (matchedSegments.new_subscribers_90d) {
+        await new Promise(resolve => setTimeout(resolve, 1000))
+        metrics.new_subscribers_90d = await getSegmentProfileCount(apiKey, matchedSegments.new_subscribers_90d)
+        console.log("[audit] New Subscribers (90d):", metrics.new_subscribers_90d)
+      }
+      if (matchedSegments.suppressed_profiles) {
+        await new Promise(resolve => setTimeout(resolve, 1000))
+        metrics.suppressed_profiles = await getSegmentProfileCount(apiKey, matchedSegments.suppressed_profiles)
+        console.log("[audit] Suppressed Profiles:", metrics.suppressed_profiles)
+      }
+
+      // Suppressed profiles %
+      if (metrics.suppressed_profiles != null && metrics.total_profiles != null && metrics.total_profiles > 0) {
+        metrics.suppressed_profiles_pct = parseFloat(
+          ((metrics.suppressed_profiles / metrics.total_profiles) * 100).toFixed(2)
+        )
+        console.log("[audit] Suppressed Profiles %:", metrics.suppressed_profiles_pct + "%")
+      }
 
       // Metric-aggregate-based metrics
       const unsubscribedMetricId = findMetricIdByName(
@@ -179,7 +224,7 @@ export async function POST(
       metrics.list_growth_rate = getListGrowthRate(
         subscribedCount1m,
         unsubscribedCount1m,
-        metrics.total_profiles
+        metrics.total_profiles ?? 0
       )
     }
 
