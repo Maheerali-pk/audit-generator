@@ -718,8 +718,27 @@ export async function GET(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  // Get the latest audit report for this account
   const admin = createAdminClient()
+  const url = new URL(request.url)
+  const history = url.searchParams.get("history")
+
+  // Return all completed audits when ?history=true
+  if (history === "true") {
+    const { data: reports, error } = await admin
+      .from("audit_reports")
+      .select("id, status, created_at, runtime_seconds, metrics")
+      .eq("klaviyo_account_id", id)
+      .eq("status", "completed")
+      .order("created_at", { ascending: false })
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 })
+    }
+
+    return NextResponse.json(reports ?? [])
+  }
+
+  // Default: return the latest audit report
   const { data: report, error } = await admin
     .from("audit_reports")
     .select("*")
@@ -733,4 +752,33 @@ export async function GET(
   }
 
   return NextResponse.json(report)
+}
+
+export async function DELETE(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params
+
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  }
+
+  const admin = createAdminClient()
+
+  const { error } = await admin
+    .from("audit_reports")
+    .delete()
+    .eq("klaviyo_account_id", id)
+
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 })
+  }
+
+  return NextResponse.json({ success: true })
 }
