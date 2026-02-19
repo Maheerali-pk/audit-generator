@@ -62,6 +62,33 @@ export interface AuditMetrics {
   integration_active: boolean | null
   total_email_revenue_30d: number | null
   total_email_revenue_90d: number | null
+
+  // ── BUSINESS PERFORMANCE SUMMARY ───────────────────────────────────
+  total_business_revenue_30d: number | null
+  klaviyo_attributed_revenue_30d: number | null
+  klaviyo_pct_of_total_revenue_30d: number | null
+  campaign_revenue_bps_30d: number | null
+  campaign_pct_of_klaviyo_revenue_30d: number | null
+  flow_revenue_bps_30d: number | null
+  flow_pct_of_klaviyo_revenue_30d: number | null
+  email_revenue_bps_30d: number | null
+  email_pct_of_klaviyo_revenue_30d: number | null
+  sms_revenue_bps_30d: number | null
+  sms_pct_of_klaviyo_revenue_30d: number | null
+  total_business_revenue_90d: number | null
+  klaviyo_attributed_revenue_90d: number | null
+  klaviyo_pct_of_total_revenue_90d: number | null
+  campaign_revenue_bps_90d: number | null
+  campaign_pct_of_klaviyo_revenue_90d: number | null
+  flow_revenue_bps_90d: number | null
+  flow_pct_of_klaviyo_revenue_90d: number | null
+  email_revenue_bps_90d: number | null
+  email_pct_of_klaviyo_revenue_90d: number | null
+  sms_revenue_bps_90d: number | null
+  sms_pct_of_klaviyo_revenue_90d: number | null
+  total_business_revenue_365d: number | null
+  klaviyo_attributed_revenue_365d: number | null
+  klaviyo_pct_of_total_revenue_365d: number | null
 }
 
 // ── Audit Report Row (matches Supabase audit_reports table) ──────────
@@ -143,5 +170,32 @@ export function createEmptyMetrics(): AuditMetrics {
     integration_active: null,
     total_email_revenue_30d: null,
     total_email_revenue_90d: null,
+
+    // Business Performance Summary
+    total_business_revenue_30d: null,
+    klaviyo_attributed_revenue_30d: null,
+    klaviyo_pct_of_total_revenue_30d: null,
+    campaign_revenue_bps_30d: null,
+    campaign_pct_of_klaviyo_revenue_30d: null,
+    flow_revenue_bps_30d: null,
+    flow_pct_of_klaviyo_revenue_30d: null,
+    email_revenue_bps_30d: null,
+    email_pct_of_klaviyo_revenue_30d: null,
+    sms_revenue_bps_30d: null,
+    sms_pct_of_klaviyo_revenue_30d: null,
+    total_business_revenue_90d: null,
+    klaviyo_attributed_revenue_90d: null,
+    klaviyo_pct_of_total_revenue_90d: null,
+    campaign_revenue_bps_90d: null,
+    campaign_pct_of_klaviyo_revenue_90d: null,
+    flow_revenue_bps_90d: null,
+    flow_pct_of_klaviyo_revenue_90d: null,
+    email_revenue_bps_90d: null,
+    email_pct_of_klaviyo_revenue_90d: null,
+    sms_revenue_bps_90d: null,
+    sms_pct_of_klaviyo_revenue_90d: null,
+    total_business_revenue_365d: null,
+    klaviyo_attributed_revenue_365d: null,
+    klaviyo_pct_of_total_revenue_365d: null,
   }
 }

@@ -15,6 +15,7 @@ import {
   queryCampaignValuesReport,
   getAllSegments,
   getSegmentProfileCount,
+  queryMetricAggregateGroupedSums,
 } from "@/lib/klaviyo"
 import { createEmptyMetrics } from "@/types/audit.types"
 import type { Json } from "@/types/database.types"
@@ -42,7 +43,7 @@ export async function POST(
     const body = await request.json()
     sections = body.sections ?? []
   } catch {
-    sections = ["email_marketing", "popups_forms", "campaigns", "technical_health"] // default: all
+    sections = ["email_marketing", "popups_forms", "campaigns", "technical_health", "business_performance_summary"] // default: all
   }
 
   console.log("[audit] Starting audit for account:", id, "sections:", sections)
@@ -70,6 +71,12 @@ export async function POST(
     console.error("[audit] Account lookup error:", dbError)
     return NextResponse.json({ error: "Account not found" }, { status: 404 })
   }
+
+  const accountTimezone =
+    typeof (account as { timezone?: unknown }).timezone === "string" &&
+    (account as { timezone?: string | null }).timezone
+      ? (account as { timezone?: string }).timezone!
+      : "UTC"
 
   // Create an in-progress audit report
   const { data: auditReport, error: insertError } = await admin
@@ -112,7 +119,11 @@ export async function POST(
 
     // Fetch Klaviyo metrics list once (shared across sections that need aggregates)
     const needsMetricsList =
-      sections.includes("email_marketing") || sections.includes("popups_forms") || sections.includes("campaigns") || sections.includes("technical_health")
+      sections.includes("email_marketing") ||
+      sections.includes("popups_forms") ||
+      sections.includes("campaigns") ||
+      sections.includes("technical_health") ||
+      sections.includes("business_performance_summary")
     const allKlaviyoMetrics = needsMetricsList
       ? await getAllMetrics(apiKey)
       : null
@@ -212,10 +223,10 @@ export async function POST(
       const endDate = now.toISOString().split("T")[0] + "T00:00:00"
 
       // Run aggregate queries sequentially (Klaviyo rate limit: 3/s)
-      const unsubscribedCount1y = await queryMetricAggregateCount(apiKey, unsubscribedMetricId, start1y, endDate)
-      const receivedCount1y = await queryMetricAggregateCount(apiKey, receivedMetricId, start1y, endDate)
-      const subscribedCount1m = await queryMetricAggregateCount(apiKey, subscribedMetricId, start1m, endDate)
-      const unsubscribedCount1m = await queryMetricAggregateCount(apiKey, unsubscribedMetricId, start1m, endDate)
+      const unsubscribedCount1y = await queryMetricAggregateCount(apiKey, unsubscribedMetricId, start1y, endDate, "count", [], accountTimezone)
+      const receivedCount1y = await queryMetricAggregateCount(apiKey, receivedMetricId, start1y, endDate, "count", [], accountTimezone)
+      const subscribedCount1m = await queryMetricAggregateCount(apiKey, subscribedMetricId, start1m, endDate, "count", [], accountTimezone)
+      const unsubscribedCount1m = await queryMetricAggregateCount(apiKey, unsubscribedMetricId, start1m, endDate, "count", [], accountTimezone)
 
       console.log("[audit] 1y — Unsubscribed:", unsubscribedCount1y, "Received:", receivedCount1y)
       console.log("[audit] 1m  — Subscribed:", subscribedCount1m, "Unsubscribed:", unsubscribedCount1m)
@@ -251,7 +262,7 @@ export async function POST(
       // SMS capture count (30d)
       const smsSubscribedMetricId = findMetricIdByName(allKlaviyoMetrics!, "Subscribed to SMS Marketing")
       console.log("[audit] Metric ID — Subscribed to SMS Marketing:", smsSubscribedMetricId)
-      metrics.sms_capture_count_30d = await queryMetricAggregateCount(apiKey, smsSubscribedMetricId, formStart, formEnd)
+      metrics.sms_capture_count_30d = await queryMetricAggregateCount(apiKey, smsSubscribedMetricId, formStart, formEnd, "count", [], accountTimezone)
       console.log("[audit] 1m — SMS Capture Count:", metrics.sms_capture_count_30d)
 
       // Email vs SMS capture ratio
@@ -319,10 +330,10 @@ export async function POST(
       ): Promise<number | null> => {
         if (flowNames.length === 0) return null
         const eventCount = await queryMetricAggregateCountByEventAndFlow(
-          apiKey, flowMetricsList, allFlows, eventName, flowNames, flowStart, flowEnd
+          apiKey, flowMetricsList, allFlows, eventName, flowNames, flowStart, flowEnd, "count", "$flow", accountTimezone
         )
         const receivedCount = await queryMetricAggregateCountByEventAndFlow(
-          apiKey, flowMetricsList, allFlows, "Received Email", flowNames, flowStart, flowEnd
+          apiKey, flowMetricsList, allFlows, "Received Email", flowNames, flowStart, flowEnd, "count", "$flow", accountTimezone
         )
         const label = flowNames.join(" | ")
         console.log(`[audit] ${label} — ${eventName}:`, eventCount, "Received:", receivedCount)
@@ -340,7 +351,7 @@ export async function POST(
       if (welcomeFlowNames.length > 0) {
         metrics.welcome_flow_revenue = await queryMetricAggregateCountByEventAndFlow(
           apiKey, flowMetricsList, allFlows, "Placed Order", welcomeFlowNames,
-          flowStart, flowEnd, "sum_value", "$attributed_flow"
+          flowStart, flowEnd, "sum_value", "$attributed_flow", accountTimezone
         )
       }
 
@@ -358,11 +369,11 @@ export async function POST(
       if (acFlowNames.length > 0) {
         const acPlacedOrders = await queryMetricAggregateCountByEventAndFlow(
           apiKey, flowMetricsList, allFlows, "Placed Order", acFlowNames,
-          flowStart, flowEnd, "count", "$attributed_flow"
+          flowStart, flowEnd, "count", "$attributed_flow", accountTimezone
         )
         const acReceived = await queryMetricAggregateCountByEventAndFlow(
           apiKey, flowMetricsList, allFlows, "Received Email", acFlowNames,
-          flowStart, flowEnd, "count", "$flow"
+          flowStart, flowEnd, "count", "$flow", accountTimezone
         )
         console.log("[audit] Abandoned Cart — Placed Orders:", acPlacedOrders, "Received:", acReceived)
         metrics.abandoned_cart_recovery_rate = acReceived > 0
@@ -398,13 +409,14 @@ export async function POST(
 
       // Total email Placed Order revenue (no flow filter)
       const totalEmailRevenue = await queryMetricAggregateCount(
-        apiKey, placedOrderMetricId, flowStart, flowEnd, "sum_value"
+        apiKey, placedOrderMetricId, flowStart, flowEnd, "sum_value", [], accountTimezone
       )
       await new Promise(resolve => setTimeout(resolve, 1000));
       // Non-flow revenue (attributed_flow is empty)
       const nonFlowRevenue = await queryMetricAggregateCount(
         apiKey, placedOrderMetricId, flowStart, flowEnd, "sum_value",
-        ['equals($attributed_flow,"")']
+        ['equals($attributed_flow,"")'],
+        accountTimezone
       )
       await new Promise(resolve => setTimeout(resolve, 1000));
 
@@ -551,7 +563,8 @@ export async function POST(
 
       const totalEmailRevenue = await queryMetricAggregateCount(
         apiKey, placedOrderMetricId, campStart, campEnd, "sum_value",
-        ['not(equals($attributed_message,""))']
+        ['not(equals($attributed_message,""))'],
+        accountTimezone
       )
       console.log("[audit] Total Email Revenue (90d):", totalEmailRevenue)
 
@@ -583,10 +596,10 @@ export async function POST(
       const start90d = ninetyDaysAgo.toISOString().split("T")[0] + "T00:00:00"
       const endDate = now.toISOString().split("T")[0] + "T00:00:00"
 
-      const bouncedCount = await queryMetricAggregateCount(apiKey, bouncedMetricId, start90d, endDate)
-      const receivedCount = await queryMetricAggregateCount(apiKey, receivedMetricId, start90d, endDate)
-      const spamCount = await queryMetricAggregateCount(apiKey, spamMetricId, start90d, endDate)
-      const openedCount = await queryMetricAggregateCount(apiKey, openedMetricId, start90d, endDate)
+      const bouncedCount = await queryMetricAggregateCount(apiKey, bouncedMetricId, start90d, endDate, "count", [], accountTimezone)
+      const receivedCount = await queryMetricAggregateCount(apiKey, receivedMetricId, start90d, endDate, "count", [], accountTimezone)
+      const spamCount = await queryMetricAggregateCount(apiKey, spamMetricId, start90d, endDate, "count", [], accountTimezone)
+      const openedCount = await queryMetricAggregateCount(apiKey, openedMetricId, start90d, endDate, "count", [], accountTimezone)
 
       console.log("[audit] 90d — Bounced:", bouncedCount, "Received:", receivedCount, "Spam:", spamCount, "Opened:", openedCount)
 
@@ -619,7 +632,7 @@ export async function POST(
         sevenDaysAgo.setDate(now.getDate() - 7)
         const start7d = sevenDaysAgo.toISOString().split("T")[0] + "T00:00:00"
 
-        const recentOrderCount = await queryMetricAggregateCount(apiKey, placedOrderMetricId, start7d, endDate)
+        const recentOrderCount = await queryMetricAggregateCount(apiKey, placedOrderMetricId, start7d, endDate, "count", [], accountTimezone)
         metrics.integration_active = recentOrderCount > 0
         console.log("[audit] Integration Active:", metrics.integration_active, "(recent Placed Orders in 7d:", recentOrderCount + ")")
 
@@ -630,7 +643,8 @@ export async function POST(
 
         const emailRevenue30d = await queryMetricAggregateCount(
           apiKey, placedOrderMetricId, start30d, endDate, "sum_value",
-          ['not(equals($attributed_message,""))']
+          ['not(equals($attributed_message,""))'],
+          accountTimezone
         )
         metrics.total_email_revenue_30d = parseFloat(emailRevenue30d.toFixed(2))
         console.log("[audit] Total Email Revenue (30d):", metrics.total_email_revenue_30d)
@@ -638,7 +652,8 @@ export async function POST(
         // Total Email Revenue (90d) — Placed Order $ attributed to email
         const emailRevenue90d = await queryMetricAggregateCount(
           apiKey, placedOrderMetricId, start90d, endDate, "sum_value",
-          ['not(equals($attributed_message,""))']
+          ['not(equals($attributed_message,""))'],
+          accountTimezone
         )
         metrics.total_email_revenue_90d = parseFloat(emailRevenue90d.toFixed(2))
         console.log("[audit] Total Email Revenue (90d):", metrics.total_email_revenue_90d)
@@ -651,6 +666,269 @@ export async function POST(
       console.log("[audit] Spam Complaint Rate:", metrics.spam_complaint_rate + "%")
       console.log("[audit] Overall Open Rate:", metrics.overall_open_rate + "%")
       console.log("[audit] Email Deliverability Rate:", metrics.email_deliverability_rate + "%")
+    }
+
+    // ── Business Performance Summary section ───────────────────────
+    if (sections.includes("business_performance_summary")) {
+      console.log("[audit] Running Business Performance Summary section...")
+      try {
+        const businessMetrics = allKlaviyoMetrics ?? await getAllMetrics(apiKey)
+        const placedOrderMetricId = findMetricIdByName(businessMetrics, "Placed Order")
+
+        const now = new Date()
+        const thirtyDaysAgo = new Date()
+        thirtyDaysAgo.setDate(now.getDate() - 30)
+        const ninetyDaysAgo = new Date()
+        ninetyDaysAgo.setDate(now.getDate() - 90)
+        const threeSixtyFiveDaysAgo = new Date()
+        threeSixtyFiveDaysAgo.setDate(now.getDate() - 365)
+
+        const start30d = thirtyDaysAgo.toISOString().split("T")[0] + "T00:00:00"
+        const start90d = ninetyDaysAgo.toISOString().split("T")[0] + "T00:00:00"
+        const start365d = threeSixtyFiveDaysAgo.toISOString().split("T")[0] + "T00:00:00"
+        const endDate = now.toISOString().split("T")[0] + "T00:00:00"
+
+        const totalBusinessRevenue30d = await queryMetricAggregateCount(
+          apiKey,
+          placedOrderMetricId,
+          start30d,
+          endDate,
+          "sum_value",
+          [],
+          accountTimezone
+        )
+
+        metrics.total_business_revenue_30d = parseFloat(totalBusinessRevenue30d.toFixed(2))
+        console.log("[audit] Total Business Revenue (30d):", metrics.total_business_revenue_30d)
+
+        // Klaviyo Attributed Revenue (30d) — group by attributed channel, then sum all buckets/groups
+        const klaviyoAttributedRevenue30d = await queryMetricAggregateCount(
+          apiKey,
+          placedOrderMetricId,
+          start30d,
+          endDate,
+          "sum_value",
+          [],
+          accountTimezone,
+          ["$attributed_channel"]
+        )
+        metrics.klaviyo_attributed_revenue_30d = parseFloat(
+          klaviyoAttributedRevenue30d.toFixed(2)
+        )
+        console.log(
+          "[audit] Klaviyo Attributed Revenue (30d):",
+          metrics.klaviyo_attributed_revenue_30d
+        )
+
+        // Klaviyo % of Total Revenue (30d) = Klaviyo Attributed Revenue / Total Business Revenue * 100
+        metrics.klaviyo_pct_of_total_revenue_30d =
+          totalBusinessRevenue30d > 0
+            ? parseFloat(((klaviyoAttributedRevenue30d / totalBusinessRevenue30d) * 100).toFixed(2))
+            : null
+        console.log(
+          "[audit] Klaviyo % of Total Revenue (30d):",
+          metrics.klaviyo_pct_of_total_revenue_30d
+        )
+
+        // Campaign Revenue (30d) — via Campaign Values Reporting API
+        const campaignResults30d = await queryCampaignValuesReport(
+          apiKey,
+          ["conversion_value"],
+          "last_30_days",
+          placedOrderMetricId
+        )
+        const campaignRevenue30d = campaignResults30d.reduce(
+          (sum, r) => sum + (r.statistics.conversion_value ?? 0),
+          0
+        )
+        metrics.campaign_revenue_bps_30d = parseFloat(campaignRevenue30d.toFixed(2))
+        metrics.campaign_pct_of_klaviyo_revenue_30d =
+          klaviyoAttributedRevenue30d > 0
+            ? parseFloat(((campaignRevenue30d / klaviyoAttributedRevenue30d) * 100).toFixed(2))
+            : null
+
+        // Flow Revenue (30d) — metric aggregate with attributed_flow filter
+        const flowRevenue30d = await queryMetricAggregateCount(
+          apiKey,
+          placedOrderMetricId,
+          start30d,
+          endDate,
+          "sum_value",
+          ['not(equals($attributed_flow,""))'],
+          accountTimezone
+        )
+        metrics.flow_revenue_bps_30d = parseFloat(flowRevenue30d.toFixed(2))
+        metrics.flow_pct_of_klaviyo_revenue_30d =
+          klaviyoAttributedRevenue30d > 0
+            ? parseFloat(((flowRevenue30d / klaviyoAttributedRevenue30d) * 100).toFixed(2))
+            : null
+
+        // Channel split (30d) — already using attributed_channel aggregate
+        const channelRevenueMap = await queryMetricAggregateGroupedSums(
+          apiKey,
+          placedOrderMetricId,
+          start30d,
+          endDate,
+          "$attributed_channel",
+          "sum_value",
+          [],
+          accountTimezone
+        )
+        const emailRevenue30d = channelRevenueMap["$email_channel"] ?? 0
+        const smsRevenue30d = channelRevenueMap["$sms_channel"] ?? 0
+
+        metrics.email_revenue_bps_30d = parseFloat(emailRevenue30d.toFixed(2))
+        metrics.sms_revenue_bps_30d = parseFloat(smsRevenue30d.toFixed(2))
+        metrics.email_pct_of_klaviyo_revenue_30d =
+          klaviyoAttributedRevenue30d > 0
+            ? parseFloat(((emailRevenue30d / klaviyoAttributedRevenue30d) * 100).toFixed(2))
+            : null
+        metrics.sms_pct_of_klaviyo_revenue_30d =
+          klaviyoAttributedRevenue30d > 0
+            ? parseFloat(((smsRevenue30d / klaviyoAttributedRevenue30d) * 100).toFixed(2))
+            : null
+
+        console.log("[audit] Campaign Revenue (30d):", metrics.campaign_revenue_bps_30d)
+        console.log("[audit] Campaign % of Klaviyo Revenue (30d):", metrics.campaign_pct_of_klaviyo_revenue_30d)
+        console.log("[audit] Flow Revenue (30d):", metrics.flow_revenue_bps_30d)
+        console.log("[audit] Flow % of Klaviyo Revenue (30d):", metrics.flow_pct_of_klaviyo_revenue_30d)
+        console.log("[audit] Email Revenue (30d):", metrics.email_revenue_bps_30d)
+        console.log("[audit] Email % of Klaviyo Revenue (30d):", metrics.email_pct_of_klaviyo_revenue_30d)
+        console.log("[audit] SMS Revenue (30d):", metrics.sms_revenue_bps_30d)
+        console.log("[audit] SMS % of Klaviyo Revenue (30d):", metrics.sms_pct_of_klaviyo_revenue_30d)
+
+        // ── 90d mirrors of the same Business Performance metrics ──
+        const totalBusinessRevenue90d = await queryMetricAggregateCount(
+          apiKey,
+          placedOrderMetricId,
+          start90d,
+          endDate,
+          "sum_value",
+          [],
+          accountTimezone
+        )
+        metrics.total_business_revenue_90d = parseFloat(totalBusinessRevenue90d.toFixed(2))
+
+        const klaviyoAttributedRevenue90d = await queryMetricAggregateCount(
+          apiKey,
+          placedOrderMetricId,
+          start90d,
+          endDate,
+          "sum_value",
+          [],
+          accountTimezone,
+          ["$attributed_channel"]
+        )
+        metrics.klaviyo_attributed_revenue_90d = parseFloat(
+          klaviyoAttributedRevenue90d.toFixed(2)
+        )
+        metrics.klaviyo_pct_of_total_revenue_90d =
+          totalBusinessRevenue90d > 0
+            ? parseFloat(((klaviyoAttributedRevenue90d / totalBusinessRevenue90d) * 100).toFixed(2))
+            : null
+
+        const campaignResults90d = await queryCampaignValuesReport(
+          apiKey,
+          ["conversion_value"],
+          "last_90_days",
+          placedOrderMetricId
+        )
+        const campaignRevenue90d = campaignResults90d.reduce(
+          (sum, r) => sum + (r.statistics.conversion_value ?? 0),
+          0
+        )
+        metrics.campaign_revenue_bps_90d = parseFloat(campaignRevenue90d.toFixed(2))
+        metrics.campaign_pct_of_klaviyo_revenue_90d =
+          klaviyoAttributedRevenue90d > 0
+            ? parseFloat(((campaignRevenue90d / klaviyoAttributedRevenue90d) * 100).toFixed(2))
+            : null
+
+        const flowRevenue90d = await queryMetricAggregateCount(
+          apiKey,
+          placedOrderMetricId,
+          start90d,
+          endDate,
+          "sum_value",
+          ['not(equals($attributed_flow,""))'],
+          accountTimezone
+        )
+        metrics.flow_revenue_bps_90d = parseFloat(flowRevenue90d.toFixed(2))
+        metrics.flow_pct_of_klaviyo_revenue_90d =
+          klaviyoAttributedRevenue90d > 0
+            ? parseFloat(((flowRevenue90d / klaviyoAttributedRevenue90d) * 100).toFixed(2))
+            : null
+
+        const channelRevenueMap90d = await queryMetricAggregateGroupedSums(
+          apiKey,
+          placedOrderMetricId,
+          start90d,
+          endDate,
+          "$attributed_channel",
+          "sum_value",
+          [],
+          accountTimezone
+        )
+        const emailRevenue90d = channelRevenueMap90d["$email_channel"] ?? 0
+        const smsRevenue90d = channelRevenueMap90d["$sms_channel"] ?? 0
+
+        metrics.email_revenue_bps_90d = parseFloat(emailRevenue90d.toFixed(2))
+        metrics.sms_revenue_bps_90d = parseFloat(smsRevenue90d.toFixed(2))
+        metrics.email_pct_of_klaviyo_revenue_90d =
+          klaviyoAttributedRevenue90d > 0
+            ? parseFloat(((emailRevenue90d / klaviyoAttributedRevenue90d) * 100).toFixed(2))
+            : null
+        metrics.sms_pct_of_klaviyo_revenue_90d =
+          klaviyoAttributedRevenue90d > 0
+            ? parseFloat(((smsRevenue90d / klaviyoAttributedRevenue90d) * 100).toFixed(2))
+            : null
+
+        console.log("[audit] Total Business Revenue (90d):", metrics.total_business_revenue_90d)
+        console.log("[audit] Klaviyo Attributed Revenue (90d):", metrics.klaviyo_attributed_revenue_90d)
+        console.log("[audit] Klaviyo % of Total Revenue (90d):", metrics.klaviyo_pct_of_total_revenue_90d)
+        console.log("[audit] Campaign Revenue (90d):", metrics.campaign_revenue_bps_90d)
+        console.log("[audit] Campaign % of Klaviyo Revenue (90d):", metrics.campaign_pct_of_klaviyo_revenue_90d)
+        console.log("[audit] Flow Revenue (90d):", metrics.flow_revenue_bps_90d)
+        console.log("[audit] Flow % of Klaviyo Revenue (90d):", metrics.flow_pct_of_klaviyo_revenue_90d)
+        console.log("[audit] Email Revenue (90d):", metrics.email_revenue_bps_90d)
+        console.log("[audit] Email % of Klaviyo Revenue (90d):", metrics.email_pct_of_klaviyo_revenue_90d)
+        console.log("[audit] SMS Revenue (90d):", metrics.sms_revenue_bps_90d)
+        console.log("[audit] SMS % of Klaviyo Revenue (90d):", metrics.sms_pct_of_klaviyo_revenue_90d)
+
+        // ── 365d (only requested metrics) ──
+        const totalBusinessRevenue365d = await queryMetricAggregateCount(
+          apiKey,
+          placedOrderMetricId,
+          start365d,
+          endDate,
+          "sum_value",
+          [],
+          accountTimezone
+        )
+        const klaviyoAttributedRevenue365d = await queryMetricAggregateCount(
+          apiKey,
+          placedOrderMetricId,
+          start365d,
+          endDate,
+          "sum_value",
+          [],
+          accountTimezone,
+          ["$attributed_channel"]
+        )
+
+        metrics.total_business_revenue_365d = parseFloat(totalBusinessRevenue365d.toFixed(2))
+        metrics.klaviyo_attributed_revenue_365d = parseFloat(
+          klaviyoAttributedRevenue365d.toFixed(2)
+        )
+        metrics.klaviyo_pct_of_total_revenue_365d =
+          totalBusinessRevenue365d > 0
+            ? parseFloat(((klaviyoAttributedRevenue365d / totalBusinessRevenue365d) * 100).toFixed(2))
+            : null
+        console.log("[audit] Total Business Revenue (365d):", metrics.total_business_revenue_365d)
+        console.log("[audit] Klaviyo Attributed Revenue (365d):", metrics.klaviyo_attributed_revenue_365d)
+        console.log("[audit] Klaviyo % of Total Revenue (365d):", metrics.klaviyo_pct_of_total_revenue_365d)
+      } catch (err) {
+        console.warn("[audit] Failed to compute business performance summary:", err)
+      }
     }
 
     const runtimeSeconds = Math.round((Date.now() - startTime) / 1000)

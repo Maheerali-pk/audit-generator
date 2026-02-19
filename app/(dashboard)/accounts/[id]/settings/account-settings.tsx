@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react"
 import Link from "next/link"
-import { ArrowLeft, Loader2, Save, X, ChevronsUpDown, Trash2, Wand2 } from "lucide-react"
+import { ArrowLeft, Loader2, Save, X, Check, ChevronsUpDown, Trash2, Wand2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -37,6 +37,7 @@ type KlaviyoAccount = {
   last_used_at: string | null
   updated_at: string | null
   flow_mappings: FlowMappings | null
+  timezone?: string | null
 }
 
 interface SimpleFlow {
@@ -46,6 +47,11 @@ interface SimpleFlow {
 }
 
 export function AccountSettings({ account }: { account: KlaviyoAccount }) {
+  const timezoneOptions = typeof Intl !== "undefined" && "supportedValuesOf" in Intl
+    ? (Intl.supportedValuesOf("timeZone") as string[])
+    : ["UTC"]
+  const allTimezoneOptions = ["UTC", ...timezoneOptions.filter((tz) => tz !== "UTC")]
+  const [timezone, setTimezone] = useState<string>(account.timezone || "UTC")
   const [flowMappings, setFlowMappings] = useState<FlowMappings>(
     (account.flow_mappings as FlowMappings) ?? { ...DEFAULT_FLOW_MAPPINGS }
   )
@@ -53,12 +59,16 @@ export function AccountSettings({ account }: { account: KlaviyoAccount }) {
   const [loadingFlows, setLoadingFlows] = useState(true)
   const [saving, setSaving] = useState(false)
   const [openPopover, setOpenPopover] = useState<FlowCategory | null>(null)
+  const [timezonePopoverOpen, setTimezonePopoverOpen] = useState(false)
 
   // Track if there are unsaved changes
   const [hasChanges, setHasChanges] = useState(false)
-  const initialMappings = useRef(
+  const initialSettings = useRef(
     JSON.stringify(
-      (account.flow_mappings as FlowMappings) ?? DEFAULT_FLOW_MAPPINGS
+      {
+        flow_mappings: (account.flow_mappings as FlowMappings) ?? DEFAULT_FLOW_MAPPINGS,
+        timezone: account.timezone || "UTC",
+      }
     )
   )
 
@@ -84,8 +94,13 @@ export function AccountSettings({ account }: { account: KlaviyoAccount }) {
 
   // Track changes
   useEffect(() => {
-    setHasChanges(JSON.stringify(flowMappings) !== initialMappings.current)
-  }, [flowMappings])
+    setHasChanges(
+      JSON.stringify({
+        flow_mappings: flowMappings,
+        timezone,
+      }) !== initialSettings.current
+    )
+  }, [flowMappings, timezone])
 
   const handleAddFlow = (category: FlowCategory, flow: SimpleFlow) => {
     setFlowMappings((prev) => {
@@ -160,14 +175,20 @@ export function AccountSettings({ account }: { account: KlaviyoAccount }) {
       const res = await fetch(`/api/accounts/${account.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ flow_mappings: flowMappings }),
+        body: JSON.stringify({
+          flow_mappings: flowMappings,
+          timezone,
+        }),
       })
       if (!res.ok) {
         const data = await res.json()
         throw new Error(data.error || "Failed to save settings")
       }
-      toast.success("Flow mappings saved successfully")
-      initialMappings.current = JSON.stringify(flowMappings)
+      toast.success("Settings saved successfully")
+      initialSettings.current = JSON.stringify({
+        flow_mappings: flowMappings,
+        timezone,
+      })
       setHasChanges(false)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to save"
@@ -210,6 +231,71 @@ export function AccountSettings({ account }: { account: KlaviyoAccount }) {
           {saving ? "Saving..." : "Save Changes"}
         </Button>
       </div>
+
+      {/* Flow Mappings Section */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Timezone</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            This timezone will be used for audit API aggregations. If no timezone
+            is set, UTC is used by default.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <div className="max-w-md">
+            <Popover
+              open={timezonePopoverOpen}
+              onOpenChange={setTimezonePopoverOpen}
+            >
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  role="combobox"
+                  aria-expanded={timezonePopoverOpen}
+                  className="h-10 w-full justify-between px-3 font-normal"
+                >
+                  <span className="truncate text-left">{timezone}</span>
+                  <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent
+                className="w-[420px] p-0"
+                align="start"
+                onOpenAutoFocus={(e) => e.preventDefault()}
+              >
+                <Command>
+                  <CommandInput placeholder="Search timezone..." />
+                  <CommandList className="max-h-72">
+                    <CommandEmpty>No timezone found.</CommandEmpty>
+                    <CommandGroup>
+                      {allTimezoneOptions.map((tz) => (
+                        <CommandItem
+                          key={tz}
+                          value={tz}
+                          onSelect={(selected) => {
+                            const matched = allTimezoneOptions.find(
+                              (option) => option.toLowerCase() === selected.toLowerCase()
+                            )
+                            if (matched) setTimezone(matched)
+                            setTimezonePopoverOpen(false)
+                          }}
+                        >
+                          <Check
+                            className={`mr-2 h-4 w-4 ${
+                              timezone === tz ? "opacity-100" : "opacity-0"
+                            }`}
+                          />
+                          <span>{tz}</span>
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Flow Mappings Section */}
       <Card>

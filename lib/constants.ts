@@ -13,6 +13,7 @@ export interface MetricMeta {
   label: string
   format: MetricFormat
   section: string
+  subsection?: "30d" | "90d" | "365d"
 }
 
 // ── Metric key → display name + format + section ─────────────────────
@@ -79,6 +80,158 @@ export const AUDIT_METRIC_META: Record<keyof AuditMetrics, MetricMeta> = {
   integration_active: { label: "Integration Active?", format: "boolean", section: "Deliverability" },
   total_email_revenue_30d: { label: "Total Email Revenue (30d)", format: "currency", section: "Deliverability" },
   total_email_revenue_90d: { label: "Total Email Revenue (90d)", format: "currency", section: "Deliverability" },
+
+  // Business Performance Summary
+  total_business_revenue_30d: {
+    label: "Total Business Revenue",
+    format: "currency",
+    section: "Business Performance Summary",
+    subsection: "30d",
+  },
+  klaviyo_attributed_revenue_30d: {
+    label: "Klaviyo Attributed Revenue",
+    format: "currency",
+    section: "Business Performance Summary",
+    subsection: "30d",
+  },
+  klaviyo_pct_of_total_revenue_30d: {
+    label: "Klaviyo % of Total Revenue",
+    format: "percent",
+    section: "Business Performance Summary",
+    subsection: "30d",
+  },
+  campaign_revenue_bps_30d: {
+    label: "Campaign Revenue",
+    format: "currency",
+    section: "Business Performance Summary",
+    subsection: "30d",
+  },
+  campaign_pct_of_klaviyo_revenue_30d: {
+    label: "Campaign % of Klaviyo Revenue",
+    format: "percent",
+    section: "Business Performance Summary",
+    subsection: "30d",
+  },
+  flow_revenue_bps_30d: {
+    label: "Flow Revenue",
+    format: "currency",
+    section: "Business Performance Summary",
+    subsection: "30d",
+  },
+  flow_pct_of_klaviyo_revenue_30d: {
+    label: "Flow % of Klaviyo Revenue",
+    format: "percent",
+    section: "Business Performance Summary",
+    subsection: "30d",
+  },
+  email_revenue_bps_30d: {
+    label: "Email Revenue",
+    format: "currency",
+    section: "Business Performance Summary",
+    subsection: "30d",
+  },
+  email_pct_of_klaviyo_revenue_30d: {
+    label: "Email % of Klaviyo Revenue",
+    format: "percent",
+    section: "Business Performance Summary",
+    subsection: "30d",
+  },
+  sms_revenue_bps_30d: {
+    label: "SMS Revenue",
+    format: "currency",
+    section: "Business Performance Summary",
+    subsection: "30d",
+  },
+  sms_pct_of_klaviyo_revenue_30d: {
+    label: "SMS % of Klaviyo Revenue",
+    format: "percent",
+    section: "Business Performance Summary",
+    subsection: "30d",
+  },
+  total_business_revenue_90d: {
+    label: "Total Business Revenue",
+    format: "currency",
+    section: "Business Performance Summary",
+    subsection: "90d",
+  },
+  klaviyo_attributed_revenue_90d: {
+    label: "Klaviyo Attributed Revenue",
+    format: "currency",
+    section: "Business Performance Summary",
+    subsection: "90d",
+  },
+  klaviyo_pct_of_total_revenue_90d: {
+    label: "Klaviyo % of Total Revenue",
+    format: "percent",
+    section: "Business Performance Summary",
+    subsection: "90d",
+  },
+  campaign_revenue_bps_90d: {
+    label: "Campaign Revenue",
+    format: "currency",
+    section: "Business Performance Summary",
+    subsection: "90d",
+  },
+  campaign_pct_of_klaviyo_revenue_90d: {
+    label: "Campaign % of Klaviyo Revenue",
+    format: "percent",
+    section: "Business Performance Summary",
+    subsection: "90d",
+  },
+  flow_revenue_bps_90d: {
+    label: "Flow Revenue",
+    format: "currency",
+    section: "Business Performance Summary",
+    subsection: "90d",
+  },
+  flow_pct_of_klaviyo_revenue_90d: {
+    label: "Flow % of Klaviyo Revenue",
+    format: "percent",
+    section: "Business Performance Summary",
+    subsection: "90d",
+  },
+  email_revenue_bps_90d: {
+    label: "Email Revenue",
+    format: "currency",
+    section: "Business Performance Summary",
+    subsection: "90d",
+  },
+  email_pct_of_klaviyo_revenue_90d: {
+    label: "Email % of Klaviyo Revenue",
+    format: "percent",
+    section: "Business Performance Summary",
+    subsection: "90d",
+  },
+  sms_revenue_bps_90d: {
+    label: "SMS Revenue",
+    format: "currency",
+    section: "Business Performance Summary",
+    subsection: "90d",
+  },
+  sms_pct_of_klaviyo_revenue_90d: {
+    label: "SMS % of Klaviyo Revenue",
+    format: "percent",
+    section: "Business Performance Summary",
+    subsection: "90d",
+  },
+  total_business_revenue_365d: {
+    label: "Total Business Revenue",
+    format: "currency",
+    section: "Business Performance Summary",
+    subsection: "365d",
+  },
+  klaviyo_attributed_revenue_365d: {
+    label: "Klaviyo Attributed Revenue",
+    format: "currency",
+    section: "Business Performance Summary",
+    subsection: "365d",
+  },
+  klaviyo_pct_of_total_revenue_365d: {
+    label: "Klaviyo % of Total Revenue",
+    format: "percent",
+    section: "Business Performance Summary",
+    subsection: "365d",
+  },
 }
 
 // ── Audit Sections (feature checkboxes) ──────────────────────────────
@@ -114,6 +267,11 @@ export const AUDIT_SECTIONS: AuditSection[] = [
     id: "technical_health",
     label: "Technical Health",
     description: "Deliverability, bounce rates, spam complaints, and email revenue",
+  },
+  {
+    id: "business_performance_summary",
+    label: "Business Performance Summary",
+    description: "Business-level revenue snapshots for 30d, 90d, and 365d windows",
   },
 ]
 

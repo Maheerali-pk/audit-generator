@@ -206,6 +206,7 @@ export function AccountDetail({ account }: { account: KlaviyoAccount }) {
     label: string
     value: string
     section: string
+    subsection?: "30d" | "90d" | "365d"
   }[] = []
 
   if (auditReport?.metrics) {
@@ -218,12 +219,14 @@ export function AccountDetail({ account }: { account: KlaviyoAccount }) {
           label: meta.label,
           value: formatMetricValue(value, meta.format),
           section: meta.section,
+          subsection: meta.subsection,
         })
       }
     }
   }
 
   const sections = [...new Set(computedMetrics.map((m) => m.section))]
+  const businessPerformanceSubsections: Array<"30d" | "90d" | "365d"> = ["30d", "90d", "365d"]
 
   const handleExportExcel = () => {
     if (!auditReport || computedMetrics.length === 0) return
@@ -687,6 +690,7 @@ export function AccountDetail({ account }: { account: KlaviyoAccount }) {
               const sectionMetrics = computedMetrics.filter(
                 (m) => m.section === section
               )
+              const isBusinessPerformanceSection = section === "Business Performance Summary"
               const isCollapsed = collapsedSections.has(section)
               const isLast = sectionIdx === sections.length - 1
 
@@ -711,7 +715,7 @@ export function AccountDetail({ account }: { account: KlaviyoAccount }) {
                   </div>
 
                   {/* Metric rows */}
-                  {!isCollapsed &&
+                  {!isCollapsed && !isBusinessPerformanceSection &&
                     sectionMetrics.map((metric, idx) => {
                       const isLastMetric = idx === sectionMetrics.length - 1
                       return (
@@ -730,6 +734,55 @@ export function AccountDetail({ account }: { account: KlaviyoAccount }) {
                         </div>
                       )
                     })}
+
+                  {!isCollapsed && isBusinessPerformanceSection && (
+                    <div>
+                      {businessPerformanceSubsections.map((subsection) => {
+                        const subsectionMetrics = sectionMetrics.filter(
+                          (m) => m.subsection === subsection
+                        )
+                        return (
+                          <div key={subsection}>
+                            <div className="flex items-center justify-between px-4 py-1.5 bg-muted/20 border-b border-border/40">
+                              <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                                {subsection}
+                              </span>
+                              <span className="text-[11px] text-muted-foreground">
+                                {subsectionMetrics.length} metrics
+                              </span>
+                            </div>
+                            {subsectionMetrics.length > 0 ? (
+                              subsectionMetrics.map((metric, idx) => {
+                                const isLastMetric = idx === subsectionMetrics.length - 1
+                                const isLastSubsection = subsection === businessPerformanceSubsections[businessPerformanceSubsections.length - 1]
+                                return (
+                                  <div
+                                    key={metric.key}
+                                    className={`flex items-center justify-between px-4 py-1.5 text-[13px] hover:bg-muted/20 transition-colors ${
+                                      !isLastMetric || !isLastSubsection || !isLast
+                                        ? "border-b border-border/50"
+                                        : ""
+                                    }`}
+                                  >
+                                    <span className="text-foreground/80 pl-5">
+                                      {metric.label}
+                                    </span>
+                                    <span className="font-mono font-medium tabular-nums text-foreground">
+                                      {metric.value}
+                                    </span>
+                                  </div>
+                                )
+                              })
+                            ) : (
+                              <div className="flex items-center justify-between px-4 py-1.5 text-[12px] text-muted-foreground border-b border-border/30">
+                                <span className="pl-5">No metrics configured yet</span>
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
                 </div>
               )
             })}

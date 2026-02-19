@@ -30,5 +30,13 @@ export default async function SettingsPage({
     notFound()
   }
 
-  return <AccountSettings account={{ ...account, flow_mappings: account.flow_mappings as FlowMappings | null }} />
+  return (
+    <AccountSettings
+      account={{
+        ...account,
+        flow_mappings: account.flow_mappings as FlowMappings | null,
+        timezone: (account as { timezone?: string | null }).timezone ?? null,
+      }}
+    />
+  )
 }

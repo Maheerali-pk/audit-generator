@@ -49,6 +49,38 @@ function klaviyoHeaders(apiKey: string) {
 }
 
 /**
+ * Wraps a fetch call with automatic retry on 429 (rate-limited) responses.
+ * Parses the "Expected available in X seconds" from the error body and waits
+ * accordingly, with a fallback of 10 s. Retries up to `maxRetries` times.
+ */
+async function fetchWithRetry(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+  maxRetries = 5
+): Promise<Response> {
+  let lastBodyText = ""
+  let lastStatus = 429
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const response = await fetch(input, init)
+
+    if (response.status !== 429) return response
+
+    lastBodyText = await response.text()
+    lastStatus = response.status
+    const waitMatch = lastBodyText.match(/available in (\d+) second/)
+    const waitSeconds = waitMatch ? parseInt(waitMatch[1], 10) : 10
+    const delay = (waitSeconds + 2) * 1000
+
+    console.warn(
+      `[klaviyo] 429 throttled (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${waitSeconds + 2}s...`
+    )
+    await new Promise((resolve) => setTimeout(resolve, delay))
+  }
+
+  return new Response(lastBodyText, { status: lastStatus })
+}
+
+/**
  * Fetches ALL profiles with subscription data from Klaviyo,
  * handling pagination internally. Returns the complete array of profiles.
  */
@@ -63,7 +95,7 @@ export async function getAllProfilesWithSubscriptionData(
 
   while (nextUrl) {
     console.log(`profiles fetched: ${allProfiles.length}`)
-    const response = await fetch(nextUrl, {
+    const response = await fetchWithRetry(nextUrl, {
       method: "GET",
       headers: klaviyoHeaders(apiKey),
     })
@@ -78,7 +110,6 @@ export async function getAllProfilesWithSubscriptionData(
     const data: KlaviyoProfilesResponse = await response.json()
     allProfiles.push(...data.data)
 
-    // data.links.next is either a full URL for the next page or null
     nextUrl = data.links.next ?? null
   }
 
@@ -97,7 +128,7 @@ export async function getAllMetrics(
   let nextUrl: string | null = `${KLAVIYO_BASE_URL}/api/metrics`
 
   while (nextUrl) {
-    const response = await fetch(nextUrl, {
+    const response = await fetchWithRetry(nextUrl, {
       method: "GET",
       headers: klaviyoHeaders(apiKey),
     })
@@ -172,7 +203,7 @@ export async function getAllSegments(
   let nextUrl: string | null = `${KLAVIYO_BASE_URL}/api/segments`
 
   while (nextUrl) {
-    const response = await fetch(nextUrl, {
+    const response = await fetchWithRetry(nextUrl, {
       method: "GET",
       headers: klaviyoHeaders(apiKey),
     })
@@ -199,7 +230,7 @@ export async function getSegmentProfileCount(
   apiKey: string,
   segmentId: string
 ): Promise<number> {
-  const response = await fetch(
+  const response = await fetchWithRetry(
     `${KLAVIYO_BASE_URL}/api/segments/${segmentId}?additional-fields[segment]=profile_count`,
     {
       method: "GET",
@@ -230,26 +261,34 @@ export async function queryMetricAggregateCount(
   startDate: string,
   endDate: string,
   measurement: MetricMeasurement = "count",
-  extraFilters: string[] = []
+  extraFilters: string[] = [],
+  timezone: string = "UTC",
+  by: string[] = []
 ): Promise<number> {
+  const attributes: MetricAggregateRequest["data"]["attributes"] = {
+    metric_id: metricId,
+    measurements: [measurement],
+    filter: [
+      `greater-or-equal(datetime,${startDate})`,
+      `less-than(datetime,${endDate})`,
+      ...extraFilters,
+    ],
+    interval: "month",
+    timezone,
+  }
+
+  if (by.length > 0) {
+    attributes.by = by
+  }
+
   const body: MetricAggregateRequest = {
     data: {
       type: "metric-aggregate",
-      attributes: {
-        metric_id: metricId,
-        measurements: [measurement],
-        filter: [
-          `greater-or-equal(datetime,${startDate})`,
-          `less-than(datetime,${endDate})`,
-          ...extraFilters,
-        ],
-        interval: "month",
-        timezone: "US/Eastern",
-      },
+      attributes,
     },
   }
 
-  const response = await fetch(`${KLAVIYO_BASE_URL}/api/metric-aggregates`, {
+  const response = await fetchWithRetry(`${KLAVIYO_BASE_URL}/api/metric-aggregates`, {
     method: "POST",
     headers: klaviyoHeaders(apiKey),
     body: JSON.stringify(body),
@@ -264,7 +303,6 @@ export async function queryMetricAggregateCount(
 
   const result: MetricAggregateResponse = await response.json()
 
-  // Sum all values across all date buckets and data points
   let total = 0
   for (const dataPoint of result.data.attributes.data) {
     const values = dataPoint.measurements[measurement] ?? []
@@ -274,6 +312,64 @@ export async function queryMetricAggregateCount(
   }
 
   return total
+}
+
+/**
+ * Queries metric-aggregates grouped by a single dimension key and returns
+ * a map of dimension value -> summed measurement across all date buckets.
+ */
+export async function queryMetricAggregateGroupedSums(
+  apiKey: string,
+  metricId: string,
+  startDate: string,
+  endDate: string,
+  byKey: string,
+  measurement: MetricMeasurement = "sum_value",
+  extraFilters: string[] = [],
+  timezone: string = "UTC"
+): Promise<Record<string, number>> {
+  const body: MetricAggregateRequest = {
+    data: {
+      type: "metric-aggregate",
+      attributes: {
+        metric_id: metricId,
+        measurements: [measurement],
+        filter: [
+          `greater-or-equal(datetime,${startDate})`,
+          `less-than(datetime,${endDate})`,
+          ...extraFilters,
+        ],
+        interval: "month",
+        timezone,
+        by: [byKey],
+      },
+    },
+  }
+
+  const response = await fetchWithRetry(`${KLAVIYO_BASE_URL}/api/metric-aggregates`, {
+    method: "POST",
+    headers: klaviyoHeaders(apiKey),
+    body: JSON.stringify(body),
+  })
+
+  if (!response.ok) {
+    const errorBody = await response.text()
+    throw new Error(
+      `Klaviyo Metric Aggregates API error (${response.status}): ${errorBody}`
+    )
+  }
+
+  const result: MetricAggregateResponse = await response.json()
+  const groupedTotals: Record<string, number> = {}
+
+  for (const dataPoint of result.data.attributes.data) {
+    const dimensionValue = dataPoint.dimensions?.[0] ?? "__unknown__"
+    const values = dataPoint.measurements[measurement] ?? []
+    const sumForDimension = values.reduce((sum, v) => sum + v, 0)
+    groupedTotals[dimensionValue] = (groupedTotals[dimensionValue] ?? 0) + sumForDimension
+  }
+
+  return groupedTotals
 }
 
 /**
@@ -313,7 +409,8 @@ export async function queryMetricAggregateCountByEventAndFlow(
   startDate: string,
   endDate: string,
   measurement: MetricMeasurement = "count",
-  flowAttribute: "$flow" | "$attributed_flow" = "$flow"
+  flowAttribute: "$flow" | "$attributed_flow" = "$flow",
+  timezone: string = "UTC"
 ): Promise<number> {
   const metricId = findMetricIdByName(allMetrics, metricName)
 
@@ -351,13 +448,13 @@ export async function queryMetricAggregateCountByEventAndFlow(
             `equals(${flowAttribute},"${flow.id}")`,
           ],
           interval: "month",
-          timezone: "US/Eastern",
+          timezone,
         },
       },
     }
 
     await new Promise(resolve => setTimeout(resolve, 1000));
-    const response = await fetch(`${KLAVIYO_BASE_URL}/api/metric-aggregates`, {
+    const response = await fetchWithRetry(`${KLAVIYO_BASE_URL}/api/metric-aggregates`, {
       method: "POST",
       headers: klaviyoHeaders(apiKey),
       body: JSON.stringify(body),
@@ -395,7 +492,7 @@ export async function getAllForms(
   let nextUrl: string | null = `${KLAVIYO_BASE_URL}/api/forms`
 
   while (nextUrl) {
-    const response = await fetch(nextUrl, {
+    const response = await fetchWithRetry(nextUrl, {
       method: "GET",
       headers: klaviyoHeaders(apiKey),
     })
@@ -433,7 +530,7 @@ export async function queryFormValuesReport(
     },
   }
 
-  const response = await fetch(`${KLAVIYO_BASE_URL}/api/form-values-reports`, {
+  const response = await fetchWithRetry(`${KLAVIYO_BASE_URL}/api/form-values-reports`, {
     method: "POST",
     headers: klaviyoHeaders(apiKey),
     body: JSON.stringify(body),
@@ -476,7 +573,7 @@ export async function getEventsByMetricId(
     `${KLAVIYO_BASE_URL}/api/events?filter=${encodeURIComponent(filter)}`
 
   while (nextUrl) {
-    const response = await fetch(nextUrl, {
+    const response = await fetchWithRetry(nextUrl, {
       method: "GET",
       headers: klaviyoHeaders(apiKey),
     })
@@ -514,7 +611,7 @@ export async function getFlows(
     : `${KLAVIYO_BASE_URL}/api/flows`
 
   while (nextUrl) {
-    const response = await fetch(nextUrl, {
+    const response = await fetchWithRetry(nextUrl, {
       method: "GET",
       headers: klaviyoHeaders(apiKey),
     })
@@ -555,7 +652,7 @@ export async function getSentCampaigns(
     `${KLAVIYO_BASE_URL}/api/campaigns?filter=${encodeURIComponent(filter)}`
 
   while (nextUrl) {
-    const response = await fetch(nextUrl, {
+    const response = await fetchWithRetry(nextUrl, {
       method: "GET",
       headers: klaviyoHeaders(apiKey),
     })
@@ -609,7 +706,7 @@ export async function queryCampaignValuesReport(
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
 
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       method: "POST",
       headers: klaviyoHeaders(apiKey),
       ...(isFirstRequest ? { body: JSON.stringify(body) } : {}),

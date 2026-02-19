@@ -46,12 +46,13 @@ export async function PATCH(
   }
 
   const body = await request.json()
-  const { client_name, api_key, flow_mappings } = body
+  const { client_name, api_key, flow_mappings, timezone } = body
 
   const updates: Record<string, unknown> = {}
   if (client_name) updates.client_name = client_name
   if (api_key) updates.api_key_encrypted = encrypt(api_key)
   if (flow_mappings !== undefined) updates.flow_mappings = flow_mappings
+  if (timezone !== undefined) updates.timezone = timezone || "UTC"
   updates.updated_at = new Date().toISOString()
 
   const admin = createAdminClient()
