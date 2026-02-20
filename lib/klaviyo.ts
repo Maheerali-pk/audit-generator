@@ -25,6 +25,9 @@ import type {
   KlaviyoFlowMessage,
   KlaviyoFlowMessagesResponse,
   KlaviyoFlowsResponse,
+  FlowValuesStatistic,
+  FlowValuesReportResult,
+  FlowValuesReportResponse,
 } from "@/types/flows.types"
 import type {
   KlaviyoCampaign,
@@ -559,16 +562,25 @@ export async function queryFormValuesReport(
 // ── Events API ───────────────────────────────────────────────────────
 
 /**
- * Fetches ALL events for a given metric ID since a start date,
+ * Fetches ALL events for a given metric ID in a date range,
  * handling pagination internally.
+ * Uses greater-or-equal for sinceDate and optional less-than for beforeDate.
  */
 export async function getEventsByMetricId(
   apiKey: string,
   metricId: string,
-  sinceDate: string
+  sinceDate: string,
+  beforeDate?: string
 ): Promise<KlaviyoEvent[]> {
   const allEvents: KlaviyoEvent[] = []
-  const filter = `equals(metric_id,"${metricId}"),greater-or-equal(datetime,${sinceDate})`
+  const filterParts = [
+    `equals(metric_id,"${metricId}")`,
+    `greater-or-equal(datetime,${sinceDate})`,
+  ]
+  if (beforeDate) {
+    filterParts.push(`less-than(datetime,${beforeDate})`)
+  }
+  const filter = filterParts.join(",")
   let nextUrl: string | null =
     `${KLAVIYO_BASE_URL}/api/events?filter=${encodeURIComponent(filter)}`
 
@@ -692,7 +704,6 @@ export async function queryCampaignValuesReport(
         statistics,
         timeframe: { key: timeframeKey },
         conversion_metric_id: conversionMetricId,
-        filter: filterStr ?? "equals(send_channel,\"email\")",
       },
     },
   }
@@ -720,6 +731,59 @@ export async function queryCampaignValuesReport(
     }
 
     const result: CampaignValuesReportResponse = await response.json()
+    allResults.push(...result.data.attributes.results)
+    url = result.links?.next ?? null
+    isFirstRequest = false
+  }
+
+  return allResults
+}
+
+/**
+ * Queries the Flow Values Reporting API (POST /api/flow-values-reports).
+ * Returns per-flow-message results with the requested statistics.
+ * Mirrors the campaign-values-reports pattern.
+ */
+export async function queryFlowValuesReport(
+  apiKey: string,
+  statistics: FlowValuesStatistic[],
+  timeframeKey: string,
+  conversionMetricId: string
+): Promise<FlowValuesReportResult[]> {
+  const body = {
+    data: {
+      type: "flow-values-report",
+      attributes: {
+        statistics,
+        timeframe: { key: timeframeKey },
+        conversion_metric_id: conversionMetricId,
+      },
+    },
+  }
+
+  let allResults: FlowValuesReportResult[] = []
+  let url: string | null = `${KLAVIYO_BASE_URL}/api/flow-values-reports`
+  let isFirstRequest = true
+
+  while (url) {
+    if (!isFirstRequest) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+
+    const response = await fetchWithRetry(url, {
+      method: "POST",
+      headers: klaviyoHeaders(apiKey),
+      ...(isFirstRequest ? { body: JSON.stringify(body) } : {}),
+    })
+
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(
+        `Klaviyo Flow Values Report API error (${response.status}): ${errorBody}`
+      )
+    }
+
+    const result: FlowValuesReportResponse = await response.json()
     allResults.push(...result.data.attributes.results)
     url = result.links?.next ?? null
     isFirstRequest = false

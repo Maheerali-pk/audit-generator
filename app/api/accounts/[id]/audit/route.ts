@@ -13,6 +13,7 @@ import {
   getFlows,
   getSentCampaigns,
   queryCampaignValuesReport,
+  queryFlowValuesReport,
   getAllSegments,
   getSegmentProfileCount,
   queryMetricAggregateGroupedSums,
@@ -74,7 +75,7 @@ export async function POST(
 
   const accountTimezone =
     typeof (account as { timezone?: unknown }).timezone === "string" &&
-    (account as { timezone?: string | null }).timezone
+      (account as { timezone?: string | null }).timezone
       ? (account as { timezone?: string }).timezone!
       : "UTC"
 
@@ -676,6 +677,8 @@ export async function POST(
         const placedOrderMetricId = findMetricIdByName(businessMetrics, "Placed Order")
 
         const now = new Date()
+        const oneDayAfterNow = new Date()
+        oneDayAfterNow.setDate(now.getDate() + 1)
         const thirtyDaysAgo = new Date()
         thirtyDaysAgo.setDate(now.getDate() - 30)
         const ninetyDaysAgo = new Date()
@@ -688,18 +691,37 @@ export async function POST(
         const start365d = threeSixtyFiveDaysAgo.toISOString().split("T")[0] + "T00:00:00"
         const endDate = now.toISOString().split("T")[0] + "T00:00:00"
 
+        // 30d total revenue via metric aggregates (same approach as 90d)
         const totalBusinessRevenue30d = await queryMetricAggregateCount(
           apiKey,
           placedOrderMetricId,
           start30d,
-          endDate,
+          oneDayAfterNow.toISOString(),
           "sum_value",
           [],
           accountTimezone
         )
-
         metrics.total_business_revenue_30d = parseFloat(totalBusinessRevenue30d.toFixed(2))
         console.log("[audit] Total Business Revenue (30d):", metrics.total_business_revenue_30d)
+
+        // // ── DISABLED: 30d total revenue via Events API ──
+        // const bpsTodayStr = new Date().toLocaleDateString("en-CA", { timeZone: accountTimezone })
+        // const [bpsY, bpsM, bpsD] = bpsTodayStr.split("-").map(Number)
+        // const eventsStart30d = new Date(Date.UTC(bpsY, bpsM - 1, bpsD - 30)).toISOString().split("T")[0] + "T00:00:00"
+        // const eventsEnd30d = bpsTodayStr + "T00:00:00"
+        // console.log("[audit] BPS 30d Events date range (tz: %s): %s → %s", accountTimezone, eventsStart30d, eventsEnd30d)
+        // const placedOrderEvents30d = await getEventsByMetricId(
+        //   apiKey,
+        //   placedOrderMetricId,
+        //   eventsStart30d,
+        //   new Date().toISOString(),
+        // )
+        // const totalBusinessRevenue30d = placedOrderEvents30d.reduce(
+        //   (sum, event) => sum + (Number(event.attributes.event_properties.$value) || 0),
+        //   0
+        // )
+        // metrics.total_business_revenue_30d = parseFloat(totalBusinessRevenue30d.toFixed(2))
+        // console.log("[audit] Total Business Revenue (30d) [Events API, %d orders]: %s", placedOrderEvents30d.length, metrics.total_business_revenue_30d)
 
         // Klaviyo Attributed Revenue (30d) — group by attributed channel, then sum all buckets/groups
         const klaviyoAttributedRevenue30d = await queryMetricAggregateCount(
@@ -733,12 +755,12 @@ export async function POST(
         // Campaign Revenue (30d) — via Campaign Values Reporting API
         const campaignResults30d = await queryCampaignValuesReport(
           apiKey,
-          ["conversion_value"],
+          ["recipients", "revenue_per_recipient"],
           "last_30_days",
           placedOrderMetricId
         )
         const campaignRevenue30d = campaignResults30d.reduce(
-          (sum, r) => sum + (r.statistics.conversion_value ?? 0),
+          (sum, r) => sum + (r.statistics.recipients ?? 0) * (r.statistics.revenue_per_recipient ?? 0),
           0
         )
         metrics.campaign_revenue_bps_30d = parseFloat(campaignRevenue30d.toFixed(2))
@@ -747,15 +769,16 @@ export async function POST(
             ? parseFloat(((campaignRevenue30d / klaviyoAttributedRevenue30d) * 100).toFixed(2))
             : null
 
-        // Flow Revenue (30d) — metric aggregate with attributed_flow filter
-        const flowRevenue30d = await queryMetricAggregateCount(
+        // Flow Revenue (30d) — via Flow Values Reporting API
+        const flowResults30d = await queryFlowValuesReport(
           apiKey,
-          placedOrderMetricId,
-          start30d,
-          endDate,
-          "sum_value",
-          ['not(equals($attributed_flow,""))'],
-          accountTimezone
+          ["recipients", "revenue_per_recipient"],
+          "last_30_days",
+          placedOrderMetricId
+        )
+        const flowRevenue30d = flowResults30d.reduce(
+          (sum, r) => sum + (r.statistics.recipients ?? 0) * (r.statistics.revenue_per_recipient ?? 0),
+          0
         )
         metrics.flow_revenue_bps_30d = parseFloat(flowRevenue30d.toFixed(2))
         metrics.flow_pct_of_klaviyo_revenue_30d =
@@ -843,14 +866,16 @@ export async function POST(
             ? parseFloat(((campaignRevenue90d / klaviyoAttributedRevenue90d) * 100).toFixed(2))
             : null
 
-        const flowRevenue90d = await queryMetricAggregateCount(
+        // Flow Revenue (90d) — via Flow Values Reporting API
+        const flowResults90d = await queryFlowValuesReport(
           apiKey,
-          placedOrderMetricId,
-          start90d,
-          endDate,
-          "sum_value",
-          ['not(equals($attributed_flow,""))'],
-          accountTimezone
+          ["recipients", "revenue_per_recipient"],
+          "last_90_days",
+          placedOrderMetricId
+        )
+        const flowRevenue90d = flowResults90d.reduce(
+          (sum, r) => sum + (r.statistics.recipients ?? 0) * (r.statistics.revenue_per_recipient ?? 0),
+          0
         )
         metrics.flow_revenue_bps_90d = parseFloat(flowRevenue90d.toFixed(2))
         metrics.flow_pct_of_klaviyo_revenue_90d =

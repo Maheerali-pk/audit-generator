@@ -127,3 +127,48 @@ export interface KlaviyoFlowMessagesResponse {
     prev?: string | null
   }
 }
+
+// ── Klaviyo POST /api/flow-values-reports response ──────────────────
+
+export type FlowValuesStatistic =
+  | "recipients"
+  | "revenue_per_recipient"
+  | "conversion_value"
+  | "conversion_rate"
+  | "conversions"
+  | "average_order_value"
+  | "open_rate"
+  | "click_rate"
+  | "unsubscribe_rate"
+  | "bounce_rate"
+  | "delivered"
+  | "opens"
+  | "clicks"
+  | "bounced"
+  | "unsubscribes"
+  | "spam_complaint_rate"
+  | "delivery_rate"
+  | "click_to_open_rate"
+
+export interface FlowValuesReportResult {
+  groupings: {
+    flow_id: string
+    send_channel: string
+    flow_message_id: string
+    [key: string]: string
+  }
+  statistics: Record<string, number>
+}
+
+export interface FlowValuesReportResponse {
+  data: {
+    type: "flow-values-report"
+    attributes: {
+      results: FlowValuesReportResult[]
+    }
+  }
+  links: {
+    self: string
+    next?: string | null
+  }
+}
