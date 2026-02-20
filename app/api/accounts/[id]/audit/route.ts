@@ -16,7 +16,6 @@ import {
   queryFlowValuesReport,
   getAllSegments,
   getSegmentProfileCount,
-  queryMetricAggregateGroupedSums,
 } from "@/lib/klaviyo"
 import { createEmptyMetrics } from "@/types/audit.types"
 import type { Json } from "@/types/database.types"
@@ -723,35 +722,6 @@ export async function POST(
         // metrics.total_business_revenue_30d = parseFloat(totalBusinessRevenue30d.toFixed(2))
         // console.log("[audit] Total Business Revenue (30d) [Events API, %d orders]: %s", placedOrderEvents30d.length, metrics.total_business_revenue_30d)
 
-        // Klaviyo Attributed Revenue (30d) — group by attributed channel, then sum all buckets/groups
-        const klaviyoAttributedRevenue30d = await queryMetricAggregateCount(
-          apiKey,
-          placedOrderMetricId,
-          start30d,
-          endDate,
-          "sum_value",
-          [],
-          accountTimezone,
-          ["$attributed_channel"]
-        )
-        metrics.klaviyo_attributed_revenue_30d = parseFloat(
-          klaviyoAttributedRevenue30d.toFixed(2)
-        )
-        console.log(
-          "[audit] Klaviyo Attributed Revenue (30d):",
-          metrics.klaviyo_attributed_revenue_30d
-        )
-
-        // Klaviyo % of Total Revenue (30d) = Klaviyo Attributed Revenue / Total Business Revenue * 100
-        metrics.klaviyo_pct_of_total_revenue_30d =
-          totalBusinessRevenue30d > 0
-            ? parseFloat(((klaviyoAttributedRevenue30d / totalBusinessRevenue30d) * 100).toFixed(2))
-            : null
-        console.log(
-          "[audit] Klaviyo % of Total Revenue (30d):",
-          metrics.klaviyo_pct_of_total_revenue_30d
-        )
-
         // Campaign Revenue (30d) — via Campaign Values Reporting API
         const campaignResults30d = await queryCampaignValuesReport(
           apiKey,
@@ -764,10 +734,6 @@ export async function POST(
           0
         )
         metrics.campaign_revenue_bps_30d = parseFloat(campaignRevenue30d.toFixed(2))
-        metrics.campaign_pct_of_klaviyo_revenue_30d =
-          klaviyoAttributedRevenue30d > 0
-            ? parseFloat(((campaignRevenue30d / klaviyoAttributedRevenue30d) * 100).toFixed(2))
-            : null
 
         // Flow Revenue (30d) — via Flow Values Reporting API
         const flowResults30d = await queryFlowValuesReport(
@@ -781,24 +747,37 @@ export async function POST(
           0
         )
         metrics.flow_revenue_bps_30d = parseFloat(flowRevenue30d.toFixed(2))
+
+        // Klaviyo Attributed Revenue (30d) = campaign revenue + flow revenue
+        const klaviyoAttributedRevenue30d = campaignRevenue30d + flowRevenue30d
+        metrics.klaviyo_attributed_revenue_30d = parseFloat(klaviyoAttributedRevenue30d.toFixed(2))
+        console.log("[audit] Klaviyo Attributed Revenue (30d):", metrics.klaviyo_attributed_revenue_30d)
+
+        metrics.klaviyo_pct_of_total_revenue_30d =
+          totalBusinessRevenue30d > 0
+            ? parseFloat(((klaviyoAttributedRevenue30d / totalBusinessRevenue30d) * 100).toFixed(2))
+            : null
+        console.log("[audit] Klaviyo % of Total Revenue (30d):", metrics.klaviyo_pct_of_total_revenue_30d)
+
+        metrics.campaign_pct_of_klaviyo_revenue_30d =
+          klaviyoAttributedRevenue30d > 0
+            ? parseFloat(((campaignRevenue30d / klaviyoAttributedRevenue30d) * 100).toFixed(2))
+            : null
         metrics.flow_pct_of_klaviyo_revenue_30d =
           klaviyoAttributedRevenue30d > 0
             ? parseFloat(((flowRevenue30d / klaviyoAttributedRevenue30d) * 100).toFixed(2))
             : null
 
-        // Channel split (30d) — already using attributed_channel aggregate
-        const channelRevenueMap = await queryMetricAggregateGroupedSums(
-          apiKey,
-          placedOrderMetricId,
-          start30d,
-          endDate,
-          "$attributed_channel",
-          "sum_value",
-          [],
-          accountTimezone
-        )
-        const emailRevenue30d = channelRevenueMap["$email_channel"] ?? 0
-        const smsRevenue30d = channelRevenueMap["$sms_channel"] ?? 0
+        // Channel split (30d) — derived from campaign + flow results already fetched above
+        const revenueByChannel = (results: { groupings: { send_channel: string }; statistics: Record<string, number> }[]) =>
+          results.reduce((sum, r) => sum + (r.statistics.recipients ?? 0) * (r.statistics.revenue_per_recipient ?? 0), 0)
+
+        const emailRevenue30d =
+          revenueByChannel(campaignResults30d.filter(r => r.groupings.send_channel === "email")) +
+          revenueByChannel(flowResults30d.filter(r => r.groupings.send_channel === "email"))
+        const smsRevenue30d =
+          revenueByChannel(campaignResults30d.filter(r => r.groupings.send_channel === "sms")) +
+          revenueByChannel(flowResults30d.filter(r => r.groupings.send_channel === "sms"))
 
         metrics.email_revenue_bps_30d = parseFloat(emailRevenue30d.toFixed(2))
         metrics.sms_revenue_bps_30d = parseFloat(smsRevenue30d.toFixed(2))
@@ -832,39 +811,17 @@ export async function POST(
         )
         metrics.total_business_revenue_90d = parseFloat(totalBusinessRevenue90d.toFixed(2))
 
-        const klaviyoAttributedRevenue90d = await queryMetricAggregateCount(
-          apiKey,
-          placedOrderMetricId,
-          start90d,
-          endDate,
-          "sum_value",
-          [],
-          accountTimezone,
-          ["$attributed_channel"]
-        )
-        metrics.klaviyo_attributed_revenue_90d = parseFloat(
-          klaviyoAttributedRevenue90d.toFixed(2)
-        )
-        metrics.klaviyo_pct_of_total_revenue_90d =
-          totalBusinessRevenue90d > 0
-            ? parseFloat(((klaviyoAttributedRevenue90d / totalBusinessRevenue90d) * 100).toFixed(2))
-            : null
-
         const campaignResults90d = await queryCampaignValuesReport(
           apiKey,
-          ["conversion_value"],
+          ["recipients", "revenue_per_recipient"],
           "last_90_days",
           placedOrderMetricId
         )
         const campaignRevenue90d = campaignResults90d.reduce(
-          (sum, r) => sum + (r.statistics.conversion_value ?? 0),
+          (sum, r) => sum + (r.statistics.recipients ?? 0) * (r.statistics.revenue_per_recipient ?? 0),
           0
         )
         metrics.campaign_revenue_bps_90d = parseFloat(campaignRevenue90d.toFixed(2))
-        metrics.campaign_pct_of_klaviyo_revenue_90d =
-          klaviyoAttributedRevenue90d > 0
-            ? parseFloat(((campaignRevenue90d / klaviyoAttributedRevenue90d) * 100).toFixed(2))
-            : null
 
         // Flow Revenue (90d) — via Flow Values Reporting API
         const flowResults90d = await queryFlowValuesReport(
@@ -878,23 +835,31 @@ export async function POST(
           0
         )
         metrics.flow_revenue_bps_90d = parseFloat(flowRevenue90d.toFixed(2))
+
+        // Klaviyo Attributed Revenue (90d) = campaign revenue + flow revenue
+        const klaviyoAttributedRevenue90d = campaignRevenue90d + flowRevenue90d
+        metrics.klaviyo_attributed_revenue_90d = parseFloat(klaviyoAttributedRevenue90d.toFixed(2))
+        metrics.klaviyo_pct_of_total_revenue_90d =
+          totalBusinessRevenue90d > 0
+            ? parseFloat(((klaviyoAttributedRevenue90d / totalBusinessRevenue90d) * 100).toFixed(2))
+            : null
+
+        metrics.campaign_pct_of_klaviyo_revenue_90d =
+          klaviyoAttributedRevenue90d > 0
+            ? parseFloat(((campaignRevenue90d / klaviyoAttributedRevenue90d) * 100).toFixed(2))
+            : null
         metrics.flow_pct_of_klaviyo_revenue_90d =
           klaviyoAttributedRevenue90d > 0
             ? parseFloat(((flowRevenue90d / klaviyoAttributedRevenue90d) * 100).toFixed(2))
             : null
 
-        const channelRevenueMap90d = await queryMetricAggregateGroupedSums(
-          apiKey,
-          placedOrderMetricId,
-          start90d,
-          endDate,
-          "$attributed_channel",
-          "sum_value",
-          [],
-          accountTimezone
-        )
-        const emailRevenue90d = channelRevenueMap90d["$email_channel"] ?? 0
-        const smsRevenue90d = channelRevenueMap90d["$sms_channel"] ?? 0
+        // Channel split (90d) — derived from campaign + flow results already fetched above
+        const emailRevenue90d =
+          revenueByChannel(campaignResults90d.filter(r => r.groupings.send_channel === "email")) +
+          revenueByChannel(flowResults90d.filter(r => r.groupings.send_channel === "email"))
+        const smsRevenue90d =
+          revenueByChannel(campaignResults90d.filter(r => r.groupings.send_channel === "sms")) +
+          revenueByChannel(flowResults90d.filter(r => r.groupings.send_channel === "sms"))
 
         metrics.email_revenue_bps_90d = parseFloat(emailRevenue90d.toFixed(2))
         metrics.sms_revenue_bps_90d = parseFloat(smsRevenue90d.toFixed(2))
